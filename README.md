@@ -28,8 +28,9 @@ ControlOverlay → rc.in (data channel) → renderer → IPC → main: RemoteGat
   que confere sessão, identidade **e SID** do remetente, taxa (240/s, rajada 480), coordenadas e
   zonas protegidas (janelas do MyScreen não recebem clique nem tecla) antes de qualquer `SendInput`.
 - Só tela inteira (não janela). O navegador pode ser controlado? Não — só o app de Windows.
-- Limitações do Windows: janelas de administrador (UIPI), UAC, tela de bloqueio e `Ctrl+Alt+Del`
-  ficam fora do alcance; o layout de teclado que vale é o do PC controlado ("Enviar texto" para
+- Janelas de administrador (UIPI): a pessoa controlada clica em **Liberar** na barra vermelha e
+  aceita o UAC; um auxiliar elevado passa a injetar o input até o app fechar.
+- Limitações do Windows: UAC, tela de bloqueio e `Ctrl+Alt+Del` ficam fora do alcance; o layout de teclado que vale é o do PC controlado ("Enviar texto" para
   layouts diferentes).
 - O servidor precisa emitir tokens com `canUpdateOwnMetadata` e `identityProof` (site ≥ commit do
   controle remoto). Com servidor antigo o recurso simplesmente não aparece.

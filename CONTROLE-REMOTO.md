@@ -565,7 +565,7 @@ e os dois conjuntos de testes o leem.
 | Controlador com layout US | Documentado: usar "Enviar texto" |
 | Arrastar janela e soltar fora do quadro | Botão não fica preso |
 | `Alt+Tab` e tecla Windows em tela cheia | Vão para o remoto (se Keyboard Lock funcionar no Electron) |
-| Gerenciador de Tarefas aberto no remoto | Pausa "elevated", aviso nos dois lados |
+| Gerenciador de Tarefas aberto no remoto | Pausa "elevated", aviso nos dois lados; "Liberar" na barra sobe o auxiliar elevado |
 | `Win+L` no remoto | Sessão revogada, "locked" |
 | Controlador perde a rede 20 s | Revogada ao reconectar; precisa pedir de novo |
 | Mesmo apelido entrando com a identidade do controlador | Não reusa identidade; sessão não migra |
@@ -631,8 +631,14 @@ Saída: notas com o que foi medido, ajustes neste documento.
 ## 13. Limitações conhecidas (comunicar na interface, não esconder)
 
 - **Navegador não pode ser controlado.** Só o app de Windows.
-- **Janelas de administrador** (Gerenciador de Tarefas, instaladores, regedit) não recebem input
-  do MyScreen enquanto o app roda sem elevação — regra do Windows (UIPI).
+- **Janelas de administrador** (jogos elevados, Gerenciador de Tarefas, instaladores, regedit) não
+  recebem input de um processo comum — regra do Windows (UIPI). Com uma delas na frente, a barra
+  vermelha do controlado mostra **Liberar**: a pessoa aceita o UAC e o MyScreen sobe um auxiliar
+  elevado (o próprio executável com `--myscreen-input-helper`, sem janela) que passa a fazer o
+  `SendInput`. O processo principal continua sendo o portão: o auxiliar só lê comandos já
+  validados de um pipe nomeado aleatório, confere com `GetNamedPipeServerProcessId` que o servidor
+  é o PID do MyScreen recebido na linha de comando, e sai quando o pipe fecha. Vale até o app
+  fechar (um UAC por execução). Jogos com anti-cheat podem ignorar input injetado mesmo assim.
 - **UAC, tela de bloqueio e `Ctrl+Alt+Del`** ficam na área de trabalho segura do Windows, que um
   app comum não alcança.
 - **Layout de teclado**: vale o do PC controlado.

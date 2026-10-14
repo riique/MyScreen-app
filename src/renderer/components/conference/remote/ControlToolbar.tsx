@@ -23,7 +23,7 @@ export function ControlToolbar({
   const [textOpen, setTextOpen] = useState(false);
   const pausedText =
     state.why === "elevated"
-      ? `${state.targetName} está numa janela de administrador; só ele pode clicar nela.`
+      ? `${state.targetName} está numa janela de administrador. Para você mexer nela, ${state.targetName} precisa clicar em "Liberar" na barra vermelha.`
       : state.why === "protected"
         ? `O MyScreen de ${state.targetName} está em primeiro plano, e as teclas não chegam nele. Clique em outra janela da tela de ${state.targetName}.`
         : state.paused

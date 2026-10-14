@@ -237,13 +237,13 @@ export function onSharingChanged(fn: () => void): () => void {
 
 // ---------------------------------------------------------------- barra do controle remoto
 
-export const CONTROL_BAR_SIZE = { width: 520, height: 46 };
+export const CONTROL_BAR_SIZE = { width: 600, height: 46 };
 
 /**
  * A barra "Fulano está controlando · Pausar · Parar": sempre no topo do monitor
  * compartilhado, fora da captura (quem controla não a vê nem clica nela), sem
  * roubar o foco do que está sendo controlado e sem X — só os botões fecham.
- * O preload dela só expõe parar e pausar.
+ * O preload dela só expõe parar, pausar e liberar janelas de administrador.
  */
 export function createControlBarWindow(workArea: Electron.Rectangle): BrowserWindow {
   const { width, height } = CONTROL_BAR_SIZE;

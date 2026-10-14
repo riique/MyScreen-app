@@ -9,28 +9,14 @@
  */
 
 import type { InjectCommand } from "../main/remoteGate";
-
-type Native = {
-  InputInjector: new () => {
-    moveTo(px: number, py: number): void;
-    button(button: number, down: boolean, px: number, py: number): void;
-    wheel(dx: number, dy: number, px: number, py: number): void;
-    key(scancode: number, down: boolean): void;
-    text(s: string): void;
-    releaseAll(): void;
-    foreground(): { pid: number; elevated: boolean | null };
-    windowPidAt(px: number, py: number): number;
-    selfElevated(): boolean;
-  };
-  startKeyboardHook(ownPid: number, onKey: (packed: number) => void): void;
-  stopKeyboardHook(): void;
-};
+import { inject, type Native } from "./inject";
 
 type Command =
   | { type: "probe"; nativePath: string; dryRun: boolean; ownPid: number }
   | { type: "inject"; cmd: InjectCommand }
   | { type: "watch"; on: boolean }
-  | { type: "hook"; on: boolean };
+  | { type: "hook"; on: boolean }
+  | { type: "elevate"; exe: string; args: string; hwnd: number };
 
 const parent = process.parentPort;
 
@@ -63,39 +49,22 @@ function run(cmd: InjectCommand): void {
     return;
   }
   if (!injector) return;
-  // Zona protegida exata: clique ou roda sobre uma janela do MyScreen que
-  // está DE FATO sob o cursor (não só atrás de outra) não entra.
-  if ((cmd.t === "button" && cmd.down) || cmd.t === "wheel") {
-    if (ownPid && injector.windowPidAt(cmd.px, cmd.py) === ownPid) {
-      parent.postMessage({ type: "blocked" });
-      return;
-    }
+  const result = inject(injector, ownPid, cmd);
+  if (result === "blocked") parent.postMessage({ type: "blocked" });
+  else if (result !== "ok") parent.postMessage({ type: "error", message: result.error });
+}
+
+/** Pede o UAC para subir o auxiliar elevado. Fora da thread do JS: o UAC espera a pessoa. */
+function elevate(exe: string, args: string, hwnd: number): void {
+  if (!native) {
+    parent.postMessage({ type: "elevate", ok: false, error: loadError ?? "módulo nativo indisponível" });
+    return;
   }
-  try {
-    switch (cmd.t) {
-      case "move":
-        injector.moveTo(cmd.px, cmd.py);
-        break;
-      case "button":
-        injector.button(cmd.button, cmd.down, cmd.px, cmd.py);
-        break;
-      case "wheel":
-        injector.wheel(cmd.dx, cmd.dy, cmd.px, cmd.py);
-        break;
-      case "key":
-        injector.key(cmd.scancode, cmd.down);
-        break;
-      case "text":
-        injector.text(cmd.text);
-        break;
-      case "release":
-        injector.releaseAll();
-        break;
-    }
-  } catch (error) {
-    // SendInput recusado (área de trabalho segura, UIPI): segue, mas avisa.
-    parent.postMessage({ type: "error", message: error instanceof Error ? error.message : String(error) });
-  }
+  native.runElevated(exe, args, hwnd).then(
+    (ok) => parent.postMessage({ type: "elevate", ok, error: null }),
+    (error: unknown) =>
+      parent.postMessage({ type: "elevate", ok: false, error: error instanceof Error ? error.message : String(error) }),
+  );
 }
 
 /**
@@ -157,6 +126,9 @@ parent.on("message", (event) => {
       break;
     case "hook":
       setHook(cmd.on);
+      break;
+    case "elevate":
+      elevate(cmd.exe, cmd.args, cmd.hwnd);
       break;
   }
 });

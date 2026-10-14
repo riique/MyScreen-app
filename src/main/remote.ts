@@ -1,4 +1,6 @@
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import {
   app,
@@ -16,6 +18,7 @@ import type { Rect } from "../shared/remote/geometry";
 import { parseCtl, randomId, type Ctl } from "../shared/remote/protocol";
 import { nativeModulePath } from "./audio";
 import { appImage } from "./icons";
+import { HELPER_FLAG, PARENT_FLAG } from "./inputHelper";
 import { RemoteGate, type HostShare, type InjectCommand, type SessionInfo } from "./remoteGate";
 import { asBoolean, asObject, asString, assertAppSender } from "./security";
 import { getSettings } from "./settings";
@@ -37,7 +40,8 @@ type WorkerMessage =
   | { type: "blocked" }
   | { type: "hookKey"; scancode: number; down: boolean }
   | { type: "hook-error"; message: string }
-  | { type: "dryrun"; cmd: InjectCommand };
+  | { type: "dryrun"; cmd: InjectCommand }
+  | { type: "elevate"; ok: boolean; error: string | null };
 
 let child: UtilityProcess | null = null;
 let probe: Promise<RemoteCapabilities> | null = null;
@@ -45,6 +49,10 @@ let bar: BrowserWindow | null = null;
 let barState: ControlBarState | null = null;
 let panicRegistered = false;
 const sessionListeners = new Set<(active: boolean) => void>();
+/** Auxiliar elevado conectado: o input vai por ele, e janelas de administrador recebem. */
+let elevatedLink: net.Socket | null = null;
+let elevating = false;
+let onElevate: ((msg: WorkerMessage & { type: "elevate" }) => void) | null = null;
 
 const DRY_RUN = process.env.MYSCREEN_INPUT_DRYRUN === "1";
 
@@ -67,7 +75,11 @@ function ensureChild(): UtilityProcess {
         onProbe = null;
         break;
       case "elevated":
-        gate.setElevated(msg.on);
+        if (!elevatedLink) gate.setElevated(msg.on);
+        break;
+      case "elevate":
+        onElevate?.(msg);
+        onElevate = null;
         break;
       case "error":
         console.warn("Controle remoto:", msg.message);
@@ -91,6 +103,8 @@ function ensureChild(): UtilityProcess {
     console.warn("Processo de controle remoto saiu com código", code);
     child = null;
     probe = null;
+    onElevate?.({ type: "elevate", ok: false, error: "o processo de controle remoto saiu" });
+    onElevate = null;
     // Não reinicia no meio de uma sessão: sem injetor, sem controle.
     gate.end("error");
   });
@@ -172,7 +186,10 @@ const gate: RemoteGate = new RemoteGate({
   acceptsRequests: () => (available && !getSettings().remoteControlDisabled ? { ok: true } : { ok: false, reason: "disabled" }),
   appFocused: () => BrowserWindow.getFocusedWindow() !== null,
   send: (to: string, msg: Ctl) => sendToMain("remote:send", to, msg),
-  inject: (cmd) => child?.postMessage({ type: "inject", cmd }),
+  inject: (cmd) => {
+    if (elevatedLink) elevatedLink.write(`${JSON.stringify(cmd)}\n`);
+    else child?.postMessage({ type: "inject", cmd });
+  },
   askConsent: (req) => {
     showMainWindow();
     consentNotification(req.name);
@@ -182,15 +199,105 @@ const gate: RemoteGate = new RemoteGate({
   sessionChanged: (info, ended) => onSessionChanged(info, ended ?? null),
 });
 
+// ---------------------------------------------------------------- janelas de administrador
+
+/**
+ * A pessoa controlada clicou em "Liberar" na barra: sobe o auxiliar elevado
+ * (UAC) e passa o input por ele. Vale até o MyScreen fechar — o UAC é uma vez
+ * por execução, e quem decide se um evento entra continua sendo o portão.
+ */
+async function elevateInput(): Promise<void> {
+  const proc = child;
+  if (elevatedLink || elevating || !proc || DRY_RUN) return;
+  elevating = true;
+  syncBar(gate.active);
+  const pipe = `\\\\.\\pipe\\myscreen-input-${randomBytes(16).toString("hex")}`;
+  const server = net.createServer();
+  let socket: net.Socket | null = null;
+  const connected = new Promise<void>((resolve) => {
+    server.on("connection", (s) => {
+      s.on("error", (error) => console.warn("Auxiliar elevado:", error.message));
+      if (socket) {
+        s.destroy();
+        return;
+      }
+      socket = s;
+      resolve();
+    });
+  });
+  // O UAC só aparece na frente se uma janela nossa estiver na frente.
+  const win = getMainWindow();
+  const wasHidden = win !== null && !win.isVisible();
+  const wasMinimized = win !== null && win.isMinimized();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(pipe, resolve);
+    });
+    showMainWindow();
+    const main = getMainWindow();
+    const hwnd = main ? Number(main.getNativeWindowHandle().readBigInt64LE(0)) : 0;
+    const args = [
+      ...(process.defaultApp ? [`"${app.getAppPath()}"`] : []),
+      `${HELPER_FLAG}${pipe}`,
+      `${PARENT_FLAG}${process.pid}`,
+    ].join(" ");
+    const reply = new Promise<WorkerMessage & { type: "elevate" }>((resolve) => {
+      onElevate = resolve;
+    });
+    proc.postMessage({ type: "elevate", exe: process.execPath, args, hwnd });
+    const result = await reply;
+    if (!result.ok) {
+      if (result.error) console.warn("Auxiliar elevado:", result.error);
+      return;
+    }
+    await Promise.race([connected, new Promise((resolve) => setTimeout(resolve, 15000))]);
+    if (!socket) {
+      console.warn("Auxiliar elevado: não conectou ao pipe.");
+      return;
+    }
+    attachElevated(socket);
+  } catch (error) {
+    console.warn("Auxiliar elevado:", error);
+  } finally {
+    server.close();
+    elevating = false;
+    // A janela volta para onde estava: quem controla segue no que estava fazendo.
+    if (win && !win.isDestroyed()) {
+      if (wasHidden) win.hide();
+      else if (wasMinimized) win.minimize();
+    }
+    syncBar(gate.active);
+  }
+}
+
+function attachElevated(socket: net.Socket): void {
+  // O que o injetor comum segurava não fica preso.
+  child?.postMessage({ type: "inject", cmd: { t: "release" } });
+  elevatedLink = socket;
+  socket.on("close", () => {
+    if (elevatedLink !== socket) return;
+    elevatedLink = null;
+    syncWatch(gate.active !== null);
+  });
+  gate.setElevated(false);
+  syncWatch(gate.active !== null);
+}
+
 // ---------------------------------------------------------------- sessão
 
 function onSessionChanged(info: SessionInfo | null, ended: RemoteSessionEvent["ended"]): void {
   const event: RemoteSessionEvent = { session: info, ended };
   sendToMain("remote:session", event);
-  child?.postMessage({ type: "watch", on: info !== null });
+  syncWatch(info !== null);
   syncPanic(info !== null);
   syncBar(info);
   for (const fn of sessionListeners) fn(info !== null);
+}
+
+/** Com o auxiliar elevado não há o que vigiar: toda janela recebe. */
+function syncWatch(active: boolean): void {
+  child?.postMessage({ type: "watch", on: active && !elevatedLink });
 }
 
 function syncBar(info: SessionInfo | null): void {
@@ -203,7 +310,7 @@ function syncBar(info: SessionInfo | null): void {
     bar = null;
     return;
   }
-  barState = { name: info.name, paused: info.paused, elevated: info.elevated };
+  barState = { name: info.name, paused: info.paused, elevated: info.elevated, elevating };
   if (!bar || bar.isDestroyed()) {
     const sharing = getSharing();
     const display =
@@ -243,6 +350,8 @@ export function stopRemoteControl(reason: "user" | "left" = "user"): void {
 
 export function shutdownRemote(): void {
   gate.end("left");
+  elevatedLink?.destroy();
+  elevatedLink = null;
   child?.kill();
   child = null;
 }
@@ -292,6 +401,7 @@ export function registerRemote(): void {
   on("remote:roomLost", () => gate.end("left"));
   on("remote:stop", () => gate.end("user"));
   on("remote:pause", (_e, paused) => gate.setPaused(asBoolean(paused, "paused")));
+  on("remote:elevate", () => void elevateInput());
 
   // Hook de teclado de quem controla: ligado enquanto a tela remota está focada.
   on("remote:captureKeys", (event, on) => void captureKeys(event.sender, asBoolean(on, "on")));

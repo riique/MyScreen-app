@@ -142,11 +142,15 @@ export interface ControlBarState {
   name: string;
   paused: boolean;
   elevated: boolean;
+  /** Esperando a pessoa responder o UAC do "Liberar". */
+  elevating: boolean;
 }
 
 export interface ControlBarBridge {
   stop(): void;
   pause(paused: boolean): void;
+  /** Libera janelas de administrador (pede o UAC). */
+  elevate(): void;
   onState(cb: (state: ControlBarState) => void): () => void;
 }
 

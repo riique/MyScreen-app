@@ -3,6 +3,7 @@ import { shutdownAudio } from "./audio";
 import { installDisplayMediaHandler } from "./capture";
 import { createTray, destroyTray, getRoomState, handleArgv, hintTray, registerProtocolClient } from "./integration";
 import { installPermissionHandlers, registerIpc } from "./ipc";
+import { inputHelperArgs, runInputHelper } from "./inputHelper";
 import { handleAppProtocol, registerSchemePrivileges } from "./protocol";
 import { shutdownRemote, watchMainWindow } from "./remote";
 import { DEV_SERVER_URL } from "./security";
@@ -22,7 +23,12 @@ import { createMainWindow, getMainWindow, installWindowPolicies, showMainWindow 
 /** Saída de verdade em curso (menu da bandeja, atualização, desligar o PC). */
 let quitting = false;
 
-if (!app.requestSingleInstanceLock()) {
+const inputHelper = inputHelperArgs(process.argv);
+
+if (inputHelper) {
+  // Auxiliar elevado do controle remoto (ver inputHelper.ts): não é o app.
+  runInputHelper(inputHelper.pipe, inputHelper.parentPid);
+} else if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.setAppUserModelId("com.myscreen.desktop");

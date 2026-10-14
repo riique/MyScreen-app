@@ -5,6 +5,7 @@
 
 pub mod capture;
 pub mod dsp;
+pub mod elevate;
 pub mod input;
 
 use std::sync::atomic::Ordering;
@@ -344,4 +345,57 @@ pub fn start_keyboard_hook(own_pid: u32, on_key: Function<u32, ()>) -> Result<()
 #[napi]
 pub fn stop_keyboard_hook() {
     input::hook::stop();
+}
+
+// ---------------------------------------------------------------- janelas de administrador
+
+pub struct ElevateTask {
+    exe: String,
+    args: String,
+    hwnd: i64,
+}
+
+impl Task for ElevateTask {
+    type Output = bool;
+    type JsValue = bool;
+
+    fn compute(&mut self) -> Result<bool> {
+        elevate::sys::run_as_admin(&self.exe, &self.args, self.hwnd as isize).map_err(Error::from_reason)
+    }
+
+    fn resolve(&mut self, _env: Env, output: bool) -> Result<bool> {
+        Ok(output)
+    }
+}
+
+/// Roda `exe args` como administrador, com o UAC preso à janela `hwnd`.
+/// Resolve `false` se a pessoa recusou. Não trava a thread do JS.
+#[napi]
+pub fn run_elevated(exe: String, args: String, hwnd: i64) -> AsyncTask<ElevateTask> {
+    AsyncTask::new(ElevateTask { exe, args, hwnd })
+}
+
+type LineFn = ThreadsafeFunction<String, (), String, Status, false, false, 1024>;
+
+/// Lado do auxiliar elevado: conecta ao pipe `path`, confere que o servidor é
+/// o processo `serverPid` e entrega cada linha a `onLine`. Quando o pipe
+/// fecha (o MyScreen saiu), chama `onLine("")` uma última vez.
+#[napi]
+pub fn connect_parent_pipe(path: String, server_pid: u32, on_line: Function<String, ()>) -> Result<()> {
+    let pipe = elevate::sys::Pipe::open(&path, server_pid).map_err(Error::from_reason)?;
+    let tsfn: LineFn = on_line
+        .build_threadsafe_function::<String>()
+        .callee_handled::<false>()
+        .max_queue_size::<1024>()
+        .build()?;
+    std::thread::Builder::new()
+        .name("myscreen-elevated-pipe".into())
+        .spawn(move || {
+            elevate::sys::read_lines(pipe, |line| {
+                let _ = tsfn.call(line, ThreadsafeFunctionCallMode::Blocking);
+            });
+            let _ = tsfn.call(String::new(), ThreadsafeFunctionCallMode::Blocking);
+        })
+        .map_err(|e| Error::from_reason(e.to_string()))?;
+    Ok(())
 }

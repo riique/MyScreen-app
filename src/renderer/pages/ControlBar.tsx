@@ -1,4 +1,4 @@
-import { Pause, Play, Square } from "lucide-react";
+import { Pause, Play, ShieldCheck, Square } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ControlBarBridge, ControlBarState } from "@shared/ipc";
 import { PANIC_SHORTCUT_LABEL } from "@/components/conference/remote/labels";
@@ -32,9 +32,21 @@ export function ControlBar() {
       <p className="min-w-0 flex-1 truncate text-[0.8125rem] font-semibold">
         {paused ? `Controle de ${name} pausado` : `${name} está controlando`}
         {state?.elevated && !paused ? (
-          <span className="font-normal text-white/85"> · janela de administrador: sem acesso</span>
+          <span className="font-normal text-white/85"> · janela de administrador</span>
         ) : null}
       </p>
+      {state?.elevated && !paused ? (
+        <button
+          type="button"
+          onClick={() => bridge.elevate()}
+          disabled={state.elevating}
+          title={`Deixa ${name} usar janelas de administrador (jogos, instaladores). O Windows vai pedir confirmação.`}
+          className="flex h-8 items-center gap-1.5 rounded border border-white/60 px-2.5 text-[0.75rem] font-semibold transition-colors hover:bg-white/15 disabled:opacity-60"
+        >
+          <ShieldCheck size={13} strokeWidth={2} aria-hidden />
+          {state.elevating ? "Aguardando…" : "Liberar"}
+        </button>
+      ) : null}
       <button
         type="button"
         onClick={() => bridge.pause(!paused)}
