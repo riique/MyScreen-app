@@ -951,6 +951,9 @@ function ConferenceStage({ roomId, token, onLeave }: { roomId: string; token: st
             <ControlledPill
               name={remoteHost.session.name}
               paused={remoteHost.session.paused}
+              elevated={remoteHost.session.elevated}
+              elevating={remoteHost.elevating}
+              onElevate={remoteHost.elevate}
               onPause={() => remoteHost.pause(!remoteHost.session?.paused)}
               onStop={remoteHost.stop}
             />
@@ -1969,11 +1972,18 @@ function BarToggle({
 function ControlledPill({
   name,
   paused,
+  elevated,
+  elevating,
+  onElevate,
   onPause,
   onStop,
 }: {
   name: string;
   paused: boolean;
+  /** Janela de administrador na frente: quem controla não alcança sem "Liberar". */
+  elevated: boolean;
+  elevating: boolean;
+  onElevate: () => void;
   onPause: () => void;
   onStop: () => void;
 }) {
@@ -1987,6 +1997,17 @@ function ControlledPill({
       <span className="max-w-[14rem] truncate font-medium">
         {paused ? `Controle de ${name} pausado` : `${name} está controlando`}
       </span>
+      {elevated && !paused ? (
+        <button
+          type="button"
+          onClick={onElevate}
+          disabled={elevating}
+          title={`Há uma janela de administrador na frente (jogo, instalador). Deixa ${name} mexer nela; o Windows vai pedir confirmação.`}
+          className="ml-1 h-7 border border-alert-line px-2 text-[0.75rem] font-semibold transition-colors hover:bg-alert-wash-2 disabled:opacity-60 [border-radius:var(--radius-cell)]"
+        >
+          {elevating ? "Aguardando…" : "Liberar"}
+        </button>
+      ) : null}
       <button
         type="button"
         onClick={onPause}

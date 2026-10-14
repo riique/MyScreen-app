@@ -37,6 +37,8 @@ export type Ctl =
   | { t: "deny"; reqId: string; reason: DenyReason }
   | { t: "revoke"; sessionId: string; reason: RevokeReason }
   | { t: "state"; sessionId: string; paused: boolean; why?: PauseWhy }
+  /** Um clique caiu numa janela do MyScreen escondida da transmissão e não entrou. */
+  | { t: "blocked"; sessionId: string }
   | { t: "ping"; sessionId: string; n: number }
   | { t: "pong"; sessionId: string; n: number };
 
@@ -115,6 +117,8 @@ export function parseCtl(input: Uint8Array | unknown): Ctl | null {
       if (m.why !== undefined) msg.why = m.why as PauseWhy;
       return msg;
     }
+    case "blocked":
+      return isId(m.sessionId) ? { t: "blocked", sessionId: m.sessionId } : null;
     case "ping":
     case "pong":
       return isId(m.sessionId) && isUint(m.n, 0xffff_ffff) ? { t: m.t, sessionId: m.sessionId, n: m.n } : null;

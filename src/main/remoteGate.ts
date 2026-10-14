@@ -95,7 +95,11 @@ type Session = {
   pressedButtons: Set<number>;
   tokens: number;
   refilledAt: number;
+  /** Último aviso de clique bloqueado (no máximo um a cada BLOCKED_NOTICE_MS). */
+  blockedNoticeAt: number;
 };
+
+const BLOCKED_NOTICE_MS = 1500;
 
 export class RemoteGate {
   private pending: Pending | null = null;
@@ -205,6 +209,7 @@ export class RemoteGate {
       pressedButtons: new Set(),
       tokens: BUCKET_BURST,
       refilledAt: this.deps.now(),
+      blockedNoticeAt: -Infinity,
     };
     send({
       t: "grant",
@@ -311,7 +316,7 @@ export class RemoteGate {
 
   // ------------------------------------------------------------ estado e fim
 
-  /** Pausa pela pessoa controlada (ControlBar). Solta tudo ao pausar. */
+  /** Pausa pela pessoa controlada (pílula da sala). Solta tudo ao pausar. */
   setPaused(paused: boolean): void {
     const s = this.session;
     if (!s || s.paused === paused) return;
@@ -328,6 +333,20 @@ export class RemoteGate {
     s.elevated = elevated;
     this.sendState(s);
     this.deps.sessionChanged(this.active);
+  }
+
+  /**
+   * Um clique caiu sobre uma janela do MyScreen (zona protegida) e foi
+   * descartado. Com "esconder o MyScreen da transmissão", quem controla nem vê
+   * a janela: avisa, para o clique não parecer sumir no nada.
+   */
+  blocked(): void {
+    const s = this.session;
+    if (!s) return;
+    const now = this.deps.now();
+    if (now - s.blockedNoticeAt < BLOCKED_NOTICE_MS) return;
+    s.blockedNoticeAt = now;
+    this.deps.send(s.peer.identity, { t: "blocked", sessionId: s.sessionId });
   }
 
   /** Uma janela do MyScreen ganhou ou perdeu o primeiro plano. */

@@ -39,6 +39,7 @@ describe("rc.ctl", () => {
       { t: "revoke", sessionId: ID, reason: "panic" },
       { t: "state", sessionId: ID, paused: true, why: "elevated" },
       { t: "state", sessionId: ID, paused: false },
+      { t: "blocked", sessionId: ID },
       { t: "ping", sessionId: ID, n: 7 },
       { t: "pong", sessionId: ID, n: 7 },
     ] as const;

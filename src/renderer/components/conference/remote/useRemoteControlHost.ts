@@ -23,6 +23,10 @@ export interface RemoteHost {
   decide(allow: boolean): void;
   stop(): void;
   pause(paused: boolean): void;
+  /** Pedindo o UAC do "Liberar" agora. */
+  elevating: boolean;
+  /** Libera janelas de administrador para quem controla. */
+  elevate(): void;
 }
 
 const END_TEXT: Record<string, string> = {
@@ -56,6 +60,7 @@ export function useRemoteControlHost({
   const consentRef = useRef(consent);
   consentRef.current = consent;
   const sessionRef = useRef(session);
+  const [elevating, setElevating] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -162,5 +167,14 @@ export function useRemoteControlHost({
     decide,
     stop: () => bridge.stop(),
     pause: (paused) => bridge.pause(paused),
+    elevating,
+    elevate: () => {
+      if (elevating) return;
+      setElevating(true);
+      void bridge
+        .elevate()
+        .catch(() => false)
+        .finally(() => setElevating(false));
+    },
   };
 }

@@ -151,14 +151,6 @@ try {
   check(rc.caps.available, `controle remoto disponível (${rc.caps.reason ?? "ok"})`);
   check(rc.consents === 1, "pedido de controle abre o consentimento");
   check(rc.grant?.to === "Ana-1a2b3c4d" && rc.grant.msg.trackSid === "TR_smoke", "permitir responde grant só a quem pediu");
-  await page.waitForTimeout(1500);
-  const barWin = app.windows().find((w) => !w.isClosed() && w.url().includes("control-bar"));
-  check(Boolean(barWin), "barra vermelha do controle remoto abre");
-  if (barWin) {
-    const keys = await barWin.evaluate(() => [Object.keys(window.myscreenBar ?? {}).sort().join(","), typeof window.myscreen]);
-    check(keys[0] === "onState,pause,stop" && keys[1] === "undefined", `barra só com parar/pausar (${keys.join(" / ")})`);
-    await barWin.screenshot({ path: path.join(out, "control-bar.png") });
-  }
   const ended = await page.evaluate(async () => {
     window.myscreen.room.setSharing({ active: false, kind: null, sourceName: "", displayId: null, trackSid: null, hideSelf: false, hasSystemAudio: false });
     await new Promise((res) => setTimeout(res, 500));
@@ -168,8 +160,6 @@ try {
     return sent.find((s) => s.msg.t === "revoke")?.msg ?? null;
   });
   check(ended?.reason === "share-ended", "parar a tela revoga o controle");
-  await page.waitForTimeout(500);
-  check(!app.windows().some((w) => !w.isClosed() && w.url().includes("control-bar")), "barra fecha quando o controle acaba");
 
   // "Só esta janela": o PID sai do HWND e a captura abre em modo include.
   const win = sources.find((s) => s.kind === "window");

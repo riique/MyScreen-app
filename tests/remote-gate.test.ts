@@ -143,6 +143,17 @@ describe("portão de input", () => {
     expect(t.input({ t: "wheel", dx: 0, dy: 120, x: 0, y: 0 })).toBe(true);
     expect(t.injected.at(-1)).toEqual({ t: "wheel", dx: 0, dy: 120, px: -1920, py: 0 });
   });
+  it("clique bloqueado numa janela do MyScreen avisa o controlador, sem inundar", () => {
+    t.gate.blocked();
+    expect(t.sent.at(-1)).toEqual({ to: ana.identity, msg: { t: "blocked", sessionId: SESSION } });
+    const n = t.sent.length;
+    t.advance(500);
+    t.gate.blocked();
+    expect(t.sent.length).toBe(n);
+    t.advance(1500);
+    t.gate.blocked();
+    expect(t.sent.length).toBe(n + 1);
+  });
   it("soltar só o botão que foi apertado por nós", () => {
     expect(t.input({ t: "button", button: 0, down: true, x: 65535, y: 65535 })).toBe(true);
     expect(t.input({ t: "button", button: 0, down: false, x: 0, y: 0 })).toBe(true);

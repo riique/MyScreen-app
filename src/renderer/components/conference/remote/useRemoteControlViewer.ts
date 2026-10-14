@@ -37,6 +37,8 @@ export type ViewerState =
       height: number;
       paused: boolean;
       why: PauseWhy | null;
+      /** Um clique acabou de cair numa janela do MyScreen escondida da transmissão. */
+      blocked: boolean;
       /** Ida e volta do `ping` em ms; null até a primeira medida. */
       rttMs: number | null;
     };
@@ -97,6 +99,8 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
   const seq = useRef(0);
   const pings = useRef(new Map<number, number>());
   const pingN = useRef(0);
+  const blockedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(blockedTimer.current), []);
 
   const sendCtl = useCallback(
     (to: string, msg: Ctl) => {
@@ -173,6 +177,7 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
             height: msg.height,
             paused: false,
             why: null,
+            blocked: false,
             rttMs: null,
           });
           break;
@@ -190,6 +195,16 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
           if (s.phase !== "active" || msg.sessionId !== s.sessionId) return;
           setState({ ...s, paused: msg.paused, why: msg.why ?? null });
           break;
+        case "blocked": {
+          if (s.phase !== "active" || msg.sessionId !== s.sessionId) return;
+          const id = s.sessionId;
+          const set = (blocked: boolean) =>
+            setState((cur) => (cur.phase === "active" && cur.sessionId === id ? { ...cur, blocked } : cur));
+          set(true);
+          clearTimeout(blockedTimer.current);
+          blockedTimer.current = setTimeout(() => set(false), 3500);
+          break;
+        }
         case "pong": {
           if (s.phase !== "active" || msg.sessionId !== s.sessionId) return;
           const sent = pings.current.get(msg.n);

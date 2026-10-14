@@ -15,12 +15,16 @@ pub const EXTRA_INFO: usize = 0x4D59_5343;
 /// Bit de tecla estendida no scancode do protocolo (prefixo E0).
 pub const EXTENDED_BIT: u16 = 0x100;
 
-/// Coordenada absoluta do `SendInput` (0..65535) sobre a área virtual.
+/// Coordenada absoluta do `SendInput` (0..65535) sobre a área virtual. Mira o
+/// CENTRO do pixel: o Windows volta para pixel com `n * size / 65536` truncado,
+/// e mirar a borda esquerda caía um pixel antes em boa parte da tela.
 pub fn normalize_virtual(p: i32, origin: i32, size: i32) -> i32 {
     if size <= 1 {
         return 0;
     }
-    let n = ((p as i64 - origin as i64) * 65535) / (size as i64 - 1);
+    let size = size as i64;
+    let offset = (p as i64 - origin as i64).clamp(0, size - 1);
+    let n = ((2 * offset + 1) * 65536) / (2 * size);
     n.clamp(0, 65535) as i32
 }
 
@@ -469,14 +473,16 @@ mod tests {
 
     #[test]
     fn normaliza_cantos_da_area_virtual() {
-        assert_eq!(normalize_virtual(0, 0, 1920), 0);
-        assert_eq!(normalize_virtual(1919, 0, 1920), 65535);
-        // Monitor à esquerda do principal: origem negativa.
-        assert_eq!(normalize_virtual(-1920, -1920, 3840), 0);
-        assert_eq!(normalize_virtual(1919, -1920, 3840), 65535);
+        // Volta exatamente ao mesmo pixel, como o Windows converte.
+        let back = |n: i32, origin: i32, size: i32| origin + ((n as i64 * size as i64) / 65536) as i32;
+        for (origin, size) in [(0, 1920), (-1920, 3840), (0, 2560), (-1280, 4480), (0, 1366)] {
+            for p in origin..origin + size {
+                assert_eq!(back(normalize_virtual(p, origin, size), origin, size), p, "pixel {p} em {origin}+{size}");
+            }
+        }
         // Fora da área: preso na borda, nunca negativo.
-        assert_eq!(normalize_virtual(-5000, -1920, 3840), 0);
-        assert_eq!(normalize_virtual(99999, 0, 1920), 65535);
+        assert_eq!(back(normalize_virtual(-5000, -1920, 3840), -1920, 3840), -1920);
+        assert_eq!(back(normalize_virtual(99999, 0, 1920), 0, 1920), 1919);
         assert_eq!(normalize_virtual(10, 0, 1), 0);
     }
 

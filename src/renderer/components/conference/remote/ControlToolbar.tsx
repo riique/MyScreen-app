@@ -23,12 +23,14 @@ export function ControlToolbar({
   const [textOpen, setTextOpen] = useState(false);
   const pausedText =
     state.why === "elevated"
-      ? `${state.targetName} está numa janela de administrador. Para você mexer nela, ${state.targetName} precisa clicar em "Liberar" na barra vermelha.`
+      ? `${state.targetName} está numa janela de administrador. Para você mexer nela, ${state.targetName} precisa clicar em "Liberar" no MyScreen (ao lado de "está controlando").`
       : state.why === "protected"
         ? `O MyScreen de ${state.targetName} está em primeiro plano, e as teclas não chegam nele. Clique em outra janela da tela de ${state.targetName}.`
         : state.paused
           ? `${state.targetName} pausou o controle.`
-          : null;
+          : state.blocked
+            ? `Esse ponto é uma janela do MyScreen de ${state.targetName}, mesmo que não apareça na transmissão. Ela não aceita seus cliques.`
+            : null;
 
   return (
     <div

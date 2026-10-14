@@ -409,6 +409,12 @@ carregar, `remote:capabilities` devolve `{ available: false, reason }` e o app n
 
 ### 7.6 ControlBar
 
+> **Removida na 1.2.1.** Fora da captura e sempre no topo, ela era um ponto cego: quem controlava
+> não a via, e a zona protegida engolia todo clique que caía atrás dela (botões de minimizar de
+> janelas no topo da tela). Pausar, parar e "Liberar" ficam na pílula da sala; janela de
+> administrador na frente gera uma notificação do Windows; clique engolido por qualquer janela do
+> MyScreen manda `{ t: "blocked" }` (no máximo um a cada 1,5 s) e quem controla vê o motivo.
+
 Nova `BrowserWindow` (em `windows.ts`): sem moldura, `alwaysOnTop("screen-saver")`,
 `skipTaskbar`, `focusable: false` (não rouba o foco do que está sendo controlado),
 `setContentProtection(true)`, posicionada no topo do monitor compartilhado. Página própria no
@@ -565,7 +571,7 @@ e os dois conjuntos de testes o leem.
 | Controlador com layout US | Documentado: usar "Enviar texto" |
 | Arrastar janela e soltar fora do quadro | Botão não fica preso |
 | `Alt+Tab` e tecla Windows em tela cheia | Vão para o remoto (se Keyboard Lock funcionar no Electron) |
-| Gerenciador de Tarefas aberto no remoto | Pausa "elevated", aviso nos dois lados; "Liberar" na barra sobe o auxiliar elevado |
+| Gerenciador de Tarefas aberto no remoto | Pausa "elevated", aviso nos dois lados; "Liberar" na sala sobe o auxiliar elevado |
 | `Win+L` no remoto | Sessão revogada, "locked" |
 | Controlador perde a rede 20 s | Revogada ao reconectar; precisa pedir de novo |
 | Mesmo apelido entrando com a identidade do controlador | Não reusa identidade; sessão não migra |
@@ -632,8 +638,8 @@ Saída: notas com o que foi medido, ajustes neste documento.
 
 - **Navegador não pode ser controlado.** Só o app de Windows.
 - **Janelas de administrador** (jogos elevados, Gerenciador de Tarefas, instaladores, regedit) não
-  recebem input de um processo comum — regra do Windows (UIPI). Com uma delas na frente, a barra
-  vermelha do controlado mostra **Liberar**: a pessoa aceita o UAC e o MyScreen sobe um auxiliar
+  recebem input de um processo comum — regra do Windows (UIPI). Com uma delas na frente, o controlado
+  recebe uma notificação e a pílula da sala mostra **Liberar**: a pessoa aceita o UAC e o MyScreen sobe um auxiliar
   elevado (o próprio executável com `--myscreen-input-helper`, sem janela) que passa a fazer o
   `SendInput`. O processo principal continua sendo o portão: o auxiliar só lê comandos já
   validados de um pipe nomeado aleatório, confere com `GetNamedPipeServerProcessId` que o servidor

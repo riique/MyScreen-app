@@ -13,8 +13,8 @@ mesmo servidor Ubuntu. O que ele faz que o navegador não faz:
   tarefas, notificação de chat, salas recentes e atualização automática pelo próprio servidor.
 - **Controle remoto com consentimento** ([CONTROLE-REMOTO.md](CONTROLE-REMOTO.md)): quem está na
   sala pede para controlar o mouse e o teclado de quem compartilha a tela inteira pelo app; só
-  vale depois do clique em "Permitir". Barra vermelha fixa no topo do monitor, `Ctrl+Alt+Shift+S`
-  para parar na hora, e a sessão cai sozinha se a tela parar, alguém sair/reconectar ou o PC
+  vale depois do clique em "Permitir". "Fulano está controlando · Pausar · Parar" na sala, linha
+  no chat, `Ctrl+Alt+Shift+S` para parar na hora, e a sessão cai sozinha se a tela parar, alguém sair/reconectar ou o PC
   bloquear.
 
 ### Controle remoto
@@ -28,7 +28,7 @@ ControlOverlay → rc.in (data channel) → renderer → IPC → main: RemoteGat
   que confere sessão, identidade **e SID** do remetente, taxa (240/s, rajada 480), coordenadas e
   zonas protegidas (janelas do MyScreen não recebem clique nem tecla) antes de qualquer `SendInput`.
 - Só tela inteira (não janela). O navegador pode ser controlado? Não — só o app de Windows.
-- Janelas de administrador (UIPI): a pessoa controlada clica em **Liberar** na barra vermelha e
+- Janelas de administrador (UIPI): a pessoa controlada clica em **Liberar** na sala (avisada por notificação) e
   aceita o UAC; um auxiliar elevado passa a injetar o input até o app fechar.
 - Limitações do Windows: UAC, tela de bloqueio e `Ctrl+Alt+Del` ficam fora do alcance; o layout de teclado que vale é o do PC controlado ("Enviar texto" para
   layouts diferentes).

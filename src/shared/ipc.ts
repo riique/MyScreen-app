@@ -137,23 +137,6 @@ export interface RemoteSessionEvent {
   ended: { reason: string; identity: string; name: string } | null;
 }
 
-/** O que a barra "Fulano está controlando" mostra. */
-export interface ControlBarState {
-  name: string;
-  paused: boolean;
-  elevated: boolean;
-  /** Esperando a pessoa responder o UAC do "Liberar". */
-  elevating: boolean;
-}
-
-export interface ControlBarBridge {
-  stop(): void;
-  pause(paused: boolean): void;
-  /** Libera janelas de administrador (pede o UAC). */
-  elevate(): void;
-  onState(cb: (state: ControlBarState) => void): () => void;
-}
-
 export interface DesktopBridge {
   app: {
     info(): Promise<{ version: string; platform: string; isPackaged: boolean }>;
@@ -214,6 +197,8 @@ export interface DesktopBridge {
     roomLost(): void;
     stop(): void;
     pause(paused: boolean): void;
+    /** Libera janelas de administrador (pede o UAC). Resolve se ficou liberado. */
+    elevate(): Promise<boolean>;
     /** Lado de quem controla: liga/desliga o hook que manda TODA tecla ao PC remoto. */
     captureKeys(on: boolean): void;
     /** Tecla física engolida pelo hook (scancode do protocolo). */

@@ -69,6 +69,7 @@ const bridge: DesktopBridge = {
     roomLost: () => ipcRenderer.send("remote:roomLost"),
     stop: () => ipcRenderer.send("remote:stop"),
     pause: (paused) => ipcRenderer.send("remote:pause", paused),
+    elevate: () => ipcRenderer.invoke("remote:elevate"),
     captureKeys: (on) => ipcRenderer.send("remote:captureKeys", on),
     onHookKey: (cb) => subscribe("remote:hookKey", cb),
     onHookState: (cb) => subscribe("remote:hookState", cb),

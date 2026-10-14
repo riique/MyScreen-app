@@ -14,6 +14,8 @@ import { inject, type Native } from "./inject";
 type Command =
   | { type: "probe"; nativePath: string; dryRun: boolean; ownPid: number }
   | { type: "inject"; cmd: InjectCommand }
+  /** Com o auxiliar elevado: só a zona protegida é conferida aqui; o resto volta ao main. */
+  | { type: "check"; cmd: InjectCommand }
   | { type: "watch"; on: boolean }
   | { type: "hook"; on: boolean }
   | { type: "elevate"; exe: string; args: string; hwnd: number };
@@ -52,6 +54,20 @@ function run(cmd: InjectCommand): void {
   const result = inject(injector, ownPid, cmd);
   if (result === "blocked") parent.postMessage({ type: "blocked" });
   else if (result !== "ok") parent.postMessage({ type: "error", message: result.error });
+}
+
+/**
+ * Com o auxiliar elevado ligado, todo comando passa por aqui antes (na ordem)
+ * só para conferir a zona protegida e avisar do clique bloqueado.
+ */
+function check(cmd: InjectCommand): void {
+  if (injector && ((cmd.t === "button" && cmd.down) || cmd.t === "wheel")) {
+    if (ownPid && injector.windowPidAt(cmd.px, cmd.py) === ownPid) {
+      parent.postMessage({ type: "blocked" });
+      return;
+    }
+  }
+  parent.postMessage({ type: "forward", cmd });
 }
 
 /** Pede o UAC para subir o auxiliar elevado. Fora da thread do JS: o UAC espera a pessoa. */
@@ -117,6 +133,9 @@ parent.on("message", (event) => {
       break;
     case "inject":
       run(cmd.cmd);
+      break;
+    case "check":
+      check(cmd.cmd);
       break;
     case "watch":
       if (watchTimer) clearInterval(watchTimer);

@@ -5,7 +5,6 @@ export function mainBuildOptions({ production }) {
     entryPoints: {
       "main/index": "src/main/index.ts",
       "preload/index": "src/preload/index.ts",
-      "preload/controlbar": "src/preload/controlbar.ts",
       "audio/worker": "src/audio/worker.ts",
       "input/worker": "src/input/worker.ts",
     },
