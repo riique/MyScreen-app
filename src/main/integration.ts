@@ -3,6 +3,7 @@ import { app, globalShortcut, Menu, Notification, Tray } from "electron";
 import type { RoomState, ShortcutAction } from "../shared/ipc";
 import { parseDeepLink } from "../shared/room";
 import { appImage, glyphImage } from "./icons";
+import { onRemoteSession, remoteSessionActive, stopRemoteControl } from "./remote";
 import { getSettings } from "./settings";
 import { getMainWindow, showMainWindow } from "./windows";
 
@@ -61,7 +62,14 @@ export function consumePendingRoom(): string | null {
 // ---------------------------------------------------------------- bandeja
 
 function trayMenu(): Menu {
+  const controlled = remoteSessionActive();
   return Menu.buildFromTemplate([
+    ...(controlled
+      ? [
+          { label: "Parar controle remoto", click: () => stopRemoteControl() },
+          { type: "separator" as const },
+        ]
+      : []),
     { label: "Mostrar o MyScreen", click: () => showMainWindow() },
     { label: "Sair da sala", enabled: roomState.inRoom, click: () => send("room:leave") },
     { type: "separator" },
@@ -75,6 +83,10 @@ export function createTray(): void {
   tray.setToolTip("MyScreen");
   tray.setContextMenu(trayMenu());
   tray.on("click", () => showMainWindow());
+  onRemoteSession((active) => {
+    tray?.setToolTip(active ? "MyScreen — alguém está controlando este computador" : "MyScreen");
+    tray?.setContextMenu(trayMenu());
+  });
 }
 
 let hinted = false;

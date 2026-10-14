@@ -28,7 +28,13 @@ export interface Platform {
   api: {
     createRoom(input: { title: string; password?: string }): Promise<RoomInfo>;
     getRoom(id: string): Promise<RoomInfo>;
-    token(input: { roomId: string; nickname: string; password?: string; participantIdentity?: string }): Promise<TokenResponse>;
+    token(input: {
+      roomId: string;
+      nickname: string;
+      password?: string;
+      participantIdentity?: string;
+      identityProof?: string;
+    }): Promise<TokenResponse>;
   };
   listCaptureSources(): Promise<CaptureSource[]>;
   selectCaptureSource(id: string, options?: { loopbackAudio?: boolean }): Promise<void>;

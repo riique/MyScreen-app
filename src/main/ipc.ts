@@ -3,6 +3,7 @@ import type { SharingState, SystemAudioMode, ThemePreference } from "../shared/i
 import { audioCapabilities, startAudio, stopAudio, updateAudio } from "./audio";
 import { listCaptureSources, selectCaptureSource } from "./capture";
 import { consumePendingRoom, notify, refreshShortcuts, setRoomState } from "./integration";
+import { registerRemote, stopRemoteControl } from "./remote";
 import {
   asBoolean,
   asNumber,
@@ -119,7 +120,12 @@ export function registerIpc(): void {
     if (patch.autoDownloadUpdates !== undefined) {
       next.autoDownloadUpdates = asBoolean(patch.autoDownloadUpdates, "autoDownloadUpdates");
     }
+    if (patch.remoteControlDisabled !== undefined) {
+      next.remoteControlDisabled = asBoolean(patch.remoteControlDisabled, "remoteControlDisabled");
+    }
     const saved = updateSettings(next);
+    // Desligou o recurso com alguém controlando: vale na hora.
+    if (saved.remoteControlDisabled) stopRemoteControl();
     refreshShortcuts();
     if (next.serverUrl && app.isPackaged) configureFeed();
     if (next.autoDownloadUpdates !== undefined) applyAutoDownload();
@@ -142,6 +148,7 @@ export function registerIpc(): void {
       nickname: asString(v.nickname, "nickname", 64),
       password: asOptionalString(v.password, "password", 200),
       participantIdentity: asOptionalString(v.participantIdentity, "participantIdentity", 64),
+      identityProof: asOptionalString(v.identityProof, "identityProof", 128),
     });
   });
   handle("api:desktopInfo", () => desktopInfo());
@@ -186,8 +193,10 @@ export function registerIpc(): void {
     const v = asObject(raw, "sharing");
     const state: SharingState = {
       active: v.active === true,
+      kind: v.kind === "screen" || v.kind === "window" ? v.kind : null,
       sourceName: typeof v.sourceName === "string" ? v.sourceName.slice(0, 200) : "",
       displayId: typeof v.displayId === "string" ? v.displayId.slice(0, 64) : null,
+      trackSid: typeof v.trackSid === "string" ? v.trackSid.slice(0, 64) : null,
       hideSelf: v.hideSelf === true,
       hasSystemAudio: v.hasSystemAudio === true,
     };
@@ -203,4 +212,6 @@ export function registerIpc(): void {
   on("updates:download", () => downloadUpdate());
   on("updates:install", () => installUpdate());
 
+  // --- controle remoto (lado controlado)
+  registerRemote();
 }

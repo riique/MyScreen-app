@@ -4,6 +4,7 @@ import { installDisplayMediaHandler } from "./capture";
 import { createTray, destroyTray, getRoomState, handleArgv, hintTray, registerProtocolClient } from "./integration";
 import { installPermissionHandlers, registerIpc } from "./ipc";
 import { handleAppProtocol, registerSchemePrivileges } from "./protocol";
+import { shutdownRemote, watchMainWindow } from "./remote";
 import { DEV_SERVER_URL } from "./security";
 import { startUpdater } from "./updater";
 import { createMainWindow, getMainWindow, installWindowPolicies, showMainWindow } from "./windows";
@@ -44,6 +45,7 @@ if (!app.requestSingleInstanceLock()) {
     registerProtocolClient();
 
     const win = createMainWindow();
+    watchMainWindow(win);
     win.on("close", (event) => {
       if (quitting) return;
       event.preventDefault();
@@ -80,6 +82,7 @@ if (!app.requestSingleInstanceLock()) {
       }
     }
     quitting = true;
+    shutdownRemote();
     shutdownAudio();
     destroyTray();
   });

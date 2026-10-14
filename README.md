@@ -11,6 +11,29 @@ mesmo servidor Ubuntu. O que ele faz que o navegador não faz:
   "Compartilhando · Parar", 60 FPS com a janela minimizada, sem dormir durante a transmissão.
 - Deep link `myscreen://room/<id>`, bandeja, atalhos globais, botões na miniatura da barra de
   tarefas, notificação de chat, salas recentes e atualização automática pelo próprio servidor.
+- **Controle remoto com consentimento** ([CONTROLE-REMOTO.md](CONTROLE-REMOTO.md)): quem está na
+  sala pede para controlar o mouse e o teclado de quem compartilha a tela inteira pelo app; só
+  vale depois do clique em "Permitir". Barra vermelha fixa no topo do monitor, `Ctrl+Alt+Shift+S`
+  para parar na hora, e a sessão cai sozinha se a tela parar, alguém sair/reconectar ou o PC
+  bloquear.
+
+### Controle remoto
+
+```
+controlador (sala)                      controlado (app de Windows)
+ControlOverlay → rc.in (data channel) → renderer → IPC → main: RemoteGate → utility "input" → SendInput
+```
+
+- O renderer do controlado **não interpreta** o input: repassa os bytes ao processo principal,
+  que confere sessão, identidade **e SID** do remetente, taxa (240/s, rajada 480), coordenadas e
+  zonas protegidas (janelas do MyScreen não recebem clique nem tecla) antes de qualquer `SendInput`.
+- Só tela inteira (não janela). O navegador pode ser controlado? Não — só o app de Windows.
+- Limitações do Windows: janelas de administrador (UIPI), UAC, tela de bloqueio e `Ctrl+Alt+Del`
+  ficam fora do alcance; o layout de teclado que vale é o do PC controlado ("Enviar texto" para
+  layouts diferentes).
+- O servidor precisa emitir tokens com `canUpdateOwnMetadata` e `identityProof` (site ≥ commit do
+  controle remoto). Com servidor antigo o recurso simplesmente não aparece.
+- Configurações → **Nunca aceitar pedidos de controle** desliga o anúncio.
 
 ## Estrutura
 
@@ -18,9 +41,11 @@ mesmo servidor Ubuntu. O que ele faz que o navegador não faz:
 src/main/       processo principal: janelas, protocolo app://, permissões, captura, API, updater
 src/preload/    a ponte window.myscreen (contextBridge, funções estreitas)
 src/audio/      utility process "audio": carrega o addon e manda PCM por MessagePort
+src/input/      utility process "input": SendInput do controle remoto (comandos já validados)
 src/renderer/   React: home, lobby, sala, seletor de captura, barra "Compartilhando"
-src/shared/     tipos do IPC e lógica pura (ids de sala, deep link, bitrate, grade, ícones)
-native/         addon Rust (napi-rs) — loopback por processo, AGC, limitador, downmix
+src/shared/     tipos do IPC e lógica pura (ids de sala, deep link, bitrate, grade, ícones,
+                protocolo/teclas/geometria do controle remoto em shared/remote/)
+native/         addon Rust (napi-rs) — loopback por processo, AGC, limitador, downmix, SendInput
 server/         o que entra no servidor (rota /downloads/ do Caddy, rota opcional do site)
 tests/          Vitest (lógica) e tests/e2e/smoke.mjs (Playwright no Electron)
 ```
@@ -41,7 +66,8 @@ npm install
 npm run build:native   # compila o addon → native/myscreen-native.node
 npm run dev            # Vite + Electron com recarga
 npm run check          # tipos + Vitest + cargo test
-npm run build && npm run test:e2e   # ponta a ponta no app real (não toca o servidor)
+npm run build && npm run test:e2e   # ponta a ponta no app real (não toca o servidor;
+                                    # controle remoto em dry-run, sem mexer no mouse)
 npm run dist           # instalador → release/MyScreen-Setup-<versão>.exe
 npm run publish:desktop  # dist + envio por SSH (ver server/README.md)
 ```
@@ -64,3 +90,7 @@ desligados, integridade do asar ligada).
 - **H.264 por hardware** (fase 4 do plano): a fase 1 usa o codec padrão do site (VP8) para paridade.
 - A matriz manual da seção 16.2 (fone 7.1, HDR, 4G/TURN, chamada de 7 h) precisa de hardware e
   rede reais.
+- Controle remoto: a matriz manual da seção 11.2 de CONTROLE-REMOTO.md (vários monitores e DPIs,
+  ABNT2, Keyboard Lock em tela cheia, UIPI, 4G/TURN) precisa de duas máquinas reais. Ficaram para
+  as próximas fases: controlador pelo navegador, prioridade do mouse local, controle de janela e
+  área de transferência.

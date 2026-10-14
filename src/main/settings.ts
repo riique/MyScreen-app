@@ -21,6 +21,7 @@ const DEFAULTS: AppSettings = {
   shortcutsEnabled: true,
   nickname: "",
   autoDownloadUpdates: true,
+  remoteControlDisabled: false,
 };
 
 let current: AppSettings | null = null;
@@ -36,6 +37,7 @@ function parse(raw: unknown): AppSettings {
   if (typeof v.serverUrl === "string") out.serverUrl = normalizeServerUrl(v.serverUrl) ?? DEFAULTS.serverUrl;
   if (typeof v.shortcutsEnabled === "boolean") out.shortcutsEnabled = v.shortcutsEnabled;
   if (typeof v.autoDownloadUpdates === "boolean") out.autoDownloadUpdates = v.autoDownloadUpdates;
+  if (typeof v.remoteControlDisabled === "boolean") out.remoteControlDisabled = v.remoteControlDisabled;
   if (typeof v.nickname === "string") out.nickname = v.nickname.trim().slice(0, 64);
   return out;
 }

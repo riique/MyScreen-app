@@ -1,7 +1,8 @@
 // Ponta a ponta: abre o app empacotado (dist/), confere a home, as fontes de
 // captura, o módulo de som nativo (captura real por 1,5 s) e o lobby com
 // câmera falsa. Uso: npm run build && node tests/e2e/smoke.mjs [pasta-de-saida]
-import { mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { _electron as electron } from "playwright-core";
 
@@ -10,10 +11,15 @@ mkdirSync(out, { recursive: true });
 
 // MYSCREEN_EXE aponta para o executável empacotado (release/win-unpacked/MyScreen.exe).
 const exe = process.env.MYSCREEN_EXE;
+// Perfil próprio: não mexe nas configurações de quem roda o teste e não esbarra
+// na trava de instância única de um MyScreen instalado e aberto.
+const profile = mkdtempSync(path.join(os.tmpdir(), "myscreen-smoke-"));
+const flags = ["--use-fake-device-for-media-stream", `--user-data-dir=${profile}`];
 const app = await electron.launch({
   ...(exe ? { executablePath: exe } : {}),
-  args: exe ? ["--use-fake-device-for-media-stream"] : [".", "--use-fake-device-for-media-stream"],
-  env: { ...process.env, VITE_DEV_SERVER_URL: "" },
+  args: exe ? flags : [".", ...flags],
+  // Dry-run: o controle remoto registra os comandos em vez de mexer no mouse.
+  env: { ...process.env, VITE_DEV_SERVER_URL: "", MYSCREEN_INPUT_DRYRUN: "1" },
 });
 const failures = [];
 const check = (ok, what) => {
@@ -34,7 +40,7 @@ try {
   await page.screenshot({ path: path.join(out, "home.png") });
 
   const bridge = await page.evaluate(() => Object.keys(window.myscreen ?? {}).sort().join(","));
-  check(bridge === "api,app,audio,bar,capture,room,settings,updates", `ponte window.myscreen (${bridge})`);
+  check(bridge === "api,app,audio,capture,remote,room,settings,updates", `ponte window.myscreen (${bridge})`);
   check(await page.evaluate(() => typeof (window).require === "undefined" && typeof (window).process === "undefined"), "renderer sem Node");
 
   const sources = await page.evaluate(() => window.myscreen.capture.list());
@@ -115,13 +121,55 @@ try {
 
   // Compartilhar não abre mais a barra flutuante.
   await page.evaluate(() =>
-    window.myscreen.room.setSharing({ active: true, sourceName: "Tela de teste", displayId: null, hideSelf: true, hasSystemAudio: false }),
+    window.myscreen.room.setSharing({ active: true, kind: "screen", sourceName: "Tela de teste", displayId: null, trackSid: null, hideSelf: true, hasSystemAudio: false }),
   );
   await page.waitForTimeout(800);
   check(!app.windows().some((w) => !w.isClosed() && w.url().includes("sharing-bar")), "sem barra Compartilhando");
   await page.evaluate(() =>
-    window.myscreen.room.setSharing({ active: false, sourceName: "", displayId: null, hideSelf: false, hasSystemAudio: false }),
+    window.myscreen.room.setSharing({ active: false, kind: null, sourceName: "", displayId: null, trackSid: null, hideSelf: false, hasSystemAudio: false }),
   );
+
+  // Controle remoto, só pelo IPC (sem LiveKit): pedido → diálogo → permitir →
+  // barra vermelha isolada → parar.
+  const rc = await page.evaluate(async ({ displayId }) => {
+    const r = window.myscreen.remote;
+    const caps = await r.capabilities();
+    const sent = [];
+    const consents = [];
+    const offSend = r.onSend((to, msg) => sent.push({ to, msg }));
+    const offConsent = r.onConsent((req) => consents.push(req));
+    window.myscreen.room.setSharing({ active: true, kind: "screen", sourceName: "Tela de teste", displayId, trackSid: "TR_smoke", hideSelf: false, hasSystemAudio: false });
+    const peer = { identity: "Ana-1a2b3c4d", sid: "PA_smoke", name: "Ana" };
+    const reqId = "AAECAwQFBgcICQoLDA0ODw";
+    r.control(peer, { t: "request", v: 1, reqId });
+    await new Promise((res) => setTimeout(res, 300));
+    if (consents.length) r.decide(reqId, true);
+    await new Promise((res) => setTimeout(res, 300));
+    window.__rc = { offSend, offConsent, sent, consents };
+    return { caps, consents: consents.length, grant: sent.find((s) => s.msg.t === "grant") ?? null };
+  }, { displayId: screenSource.displayId });
+  check(rc.caps.available, `controle remoto disponível (${rc.caps.reason ?? "ok"})`);
+  check(rc.consents === 1, "pedido de controle abre o consentimento");
+  check(rc.grant?.to === "Ana-1a2b3c4d" && rc.grant.msg.trackSid === "TR_smoke", "permitir responde grant só a quem pediu");
+  await page.waitForTimeout(1500);
+  const barWin = app.windows().find((w) => !w.isClosed() && w.url().includes("control-bar"));
+  check(Boolean(barWin), "barra vermelha do controle remoto abre");
+  if (barWin) {
+    const keys = await barWin.evaluate(() => [Object.keys(window.myscreenBar ?? {}).sort().join(","), typeof window.myscreen]);
+    check(keys[0] === "onState,pause,stop" && keys[1] === "undefined", `barra só com parar/pausar (${keys.join(" / ")})`);
+    await barWin.screenshot({ path: path.join(out, "control-bar.png") });
+  }
+  const ended = await page.evaluate(async () => {
+    window.myscreen.room.setSharing({ active: false, kind: null, sourceName: "", displayId: null, trackSid: null, hideSelf: false, hasSystemAudio: false });
+    await new Promise((res) => setTimeout(res, 500));
+    const { sent, offSend, offConsent } = window.__rc;
+    offSend();
+    offConsent();
+    return sent.find((s) => s.msg.t === "revoke")?.msg ?? null;
+  });
+  check(ended?.reason === "share-ended", "parar a tela revoga o controle");
+  await page.waitForTimeout(500);
+  check(!app.windows().some((w) => !w.isClosed() && w.url().includes("control-bar")), "barra fecha quando o controle acaba");
 
   // "Só esta janela": o PID sai do HWND e a captura abre em modo include.
   const win = sources.find((s) => s.kind === "window");

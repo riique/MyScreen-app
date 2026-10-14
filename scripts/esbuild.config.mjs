@@ -1,11 +1,13 @@
-// Main, preload e o utility process de áudio: CommonJS para o Node do Electron.
+// Main, preloads e os utility processes (áudio e controle remoto): CommonJS para o Node do Electron.
 // O preload roda com sandbox: vai num arquivo só, sem require além de "electron".
 export function mainBuildOptions({ production }) {
   return {
     entryPoints: {
       "main/index": "src/main/index.ts",
       "preload/index": "src/preload/index.ts",
+      "preload/controlbar": "src/preload/controlbar.ts",
       "audio/worker": "src/audio/worker.ts",
+      "input/worker": "src/input/worker.ts",
     },
     outdir: "dist",
     bundle: true,

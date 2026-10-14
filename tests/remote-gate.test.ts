@@ -1,0 +1,215 @@
+import { beforeEach, describe, expect, it } from "vitest";
+import { RemoteGate, type GateDeps, type HostShare, type InjectCommand } from "../src/main/remoteGate";
+import type { Rect } from "@shared/remote/geometry";
+import { encodeInput, sessionTag, type Ctl, type InputEvent } from "@shared/remote/protocol";
+
+const REQ = "AAECAwQFBgcICQoLDA0ODw";
+const SESSION = "EBESExQVFhcYGRobHB0eHw";
+const ana = { identity: "Ana-1a2b3c4d", sid: "PA_ana1", name: "Ana" };
+const display: Rect = { x: -1920, y: 0, w: 1920, h: 1080 };
+
+function setup() {
+  let now = 0;
+  const timers = new Map<number, { fn: () => void; at: number }>();
+  let timerId = 0;
+  const sent: { to: string; msg: Ctl }[] = [];
+  const injected: InjectCommand[] = [];
+  const log: string[] = [];
+  const consents: string[] = [];
+  const world = {
+    share: { kind: "screen", sourceName: "Monitor 1", trackSid: "TR_screen", physical: display } as HostShare | null,
+    disabled: false,
+    protected: [] as Rect[],
+    appFocused: false,
+  };
+  const deps: GateDeps = {
+    now: () => now,
+    setTimer: (fn, ms) => {
+      timers.set(++timerId, { fn, at: now + ms });
+      return timerId;
+    },
+    clearTimer: (h) => timers.delete(h as number),
+    randomId: () => SESSION,
+    share: () => world.share,
+    acceptsRequests: () => (world.disabled ? { ok: false, reason: "disabled" } : { ok: true }),
+    protectedRects: () => world.protected,
+    appFocused: () => world.appFocused,
+    send: (to, msg) => sent.push({ to, msg }),
+    inject: (cmd) => {
+      injected.push(cmd);
+      log.push(`inject:${cmd.t}`);
+    },
+    askConsent: (req) => consents.push(req.reqId),
+    closeConsent: () => {},
+    sessionChanged: (info) => log.push(info ? "session:on" : "session:off"),
+  };
+  const gate = new RemoteGate(deps);
+  const advance = (ms: number) => {
+    now += ms;
+    for (const [id, t] of [...timers]) {
+      if (t.at <= now) {
+        timers.delete(id);
+        t.fn();
+      }
+    }
+  };
+  let seq = 0;
+  const input = (ev: InputEvent, from = ana, s = ++seq) => gate.handleInput(from, encodeInput(sessionTag(SESSION), s, ev));
+  const grant = () => {
+    gate.handleCtl(ana, { t: "request", v: 1, reqId: REQ });
+    gate.decide(REQ, true);
+  };
+  return { gate, sent, injected, log, consents, world, advance, input, grant, setSeq: (v: number) => (seq = v) };
+}
+
+let t: ReturnType<typeof setup>;
+beforeEach(() => {
+  t = setup();
+});
+
+describe("consentimento", () => {
+  it("pedido abre o diálogo; sem clique não há sessão", () => {
+    t.gate.handleCtl(ana, { t: "request", v: 1, reqId: REQ });
+    expect(t.consents).toEqual([REQ]);
+    expect(t.gate.active).toBeNull();
+    expect(t.input({ t: "move", x: 1, y: 1 })).toBe(false);
+  });
+  it("expira em 30 s como recusa, com espera antes de pedir de novo", () => {
+    t.gate.handleCtl(ana, { t: "request", v: 1, reqId: REQ });
+    t.advance(30_000);
+    expect(t.sent.at(-1)?.msg).toEqual({ t: "deny", reqId: REQ, reason: "timeout" });
+    t.gate.handleCtl(ana, { t: "request", v: 1, reqId: SESSION });
+    expect(t.sent.at(-1)?.msg).toMatchObject({ t: "deny", reason: "cooldown" });
+    t.advance(30_000);
+    t.gate.handleCtl(ana, { t: "request", v: 1, reqId: SESSION });
+    expect(t.consents).toHaveLength(2);
+  });
+  it("recusado, desligado, sem tela ou com janela", () => {
+    t.gate.handleCtl(ana, { t: "request", v: 1, reqId: REQ });
+    t.gate.decide(REQ, false);
+    expect(t.sent.at(-1)?.msg).toMatchObject({ t: "deny", reason: "refused" });
+
+    const u = setup();
+    u.world.disabled = true;
+    u.gate.handleCtl(ana, { t: "request", v: 1, reqId: REQ });
+    expect(u.sent.at(-1)?.msg).toMatchObject({ t: "deny", reason: "disabled" });
+
+    const w = setup();
+    w.world.share = { kind: "window", sourceName: "Bloco", trackSid: "TR_w", physical: null };
+    w.gate.handleCtl(ana, { t: "request", v: 1, reqId: REQ });
+    expect(w.sent.at(-1)?.msg).toMatchObject({ t: "deny", reason: "not-sharing" });
+  });
+  it("um controlador por vez", () => {
+    t.grant();
+    t.gate.handleCtl({ identity: "Bia-00000000", sid: "PA_b", name: "Bia" }, { t: "request", v: 1, reqId: REQ });
+    expect(t.sent.at(-1)).toEqual({ to: "Bia-00000000", msg: { t: "deny", reqId: REQ, reason: "busy" } });
+  });
+  it("permitir manda grant com a trilha e o tamanho do monitor", () => {
+    t.grant();
+    expect(t.sent.at(-1)?.msg).toEqual({ t: "grant", reqId: REQ, sessionId: SESSION, trackSid: "TR_screen", width: 1920, height: 1080 });
+    expect(t.gate.active?.identity).toBe(ana.identity);
+  });
+});
+
+describe("portão de input", () => {
+  beforeEach(() => t.grant());
+
+  it("mapeia para o pixel físico do monitor compartilhado", () => {
+    expect(t.input({ t: "button", button: 0, down: true, x: 65535, y: 0 })).toBe(true);
+    expect(t.injected.at(-1)).toEqual({ t: "button", button: 0, down: true, px: -1, py: 0 });
+  });
+  it("identidade certa com SID errado é descartada", () => {
+    expect(t.input({ t: "move", x: 1, y: 1 }, { ...ana, sid: "PA_outro" })).toBe(false);
+    expect(t.input({ t: "move", x: 1, y: 1 }, { identity: "Bia", sid: "PA_ana1", name: "Ana" })).toBe(false);
+    expect(t.injected).toHaveLength(0);
+  });
+  it("tag de sessão velha é descartada", () => {
+    expect(t.gate.handleInput(ana, encodeInput(123, 1, { t: "move", x: 1, y: 1 }))).toBe(false);
+  });
+  it("MOVE mais velho que o último evento aplicado é descartado", () => {
+    t.setSeq(10);
+    expect(t.input({ t: "move", x: 5, y: 5 }, ana, 10)).toBe(true);
+    expect(t.input({ t: "move", x: 4, y: 4 }, ana, 9)).toBe(false);
+    expect(t.input({ t: "move", x: 6, y: 6 }, ana, 11)).toBe(true);
+  });
+  it("zona protegida: descarta clique e roda, deixa movimento passar", () => {
+    t.world.protected = [{ x: -1920, y: 0, w: 500, h: 500 }];
+    expect(t.input({ t: "move", x: 0, y: 0 })).toBe(true);
+    expect(t.input({ t: "button", button: 0, down: true, x: 0, y: 0 })).toBe(false);
+    expect(t.input({ t: "wheel", dx: 0, dy: 120, x: 0, y: 0 })).toBe(false);
+  });
+  it("arrastar para dentro da zona protegida ainda solta o botão", () => {
+    expect(t.input({ t: "button", button: 0, down: true, x: 65535, y: 65535 })).toBe(true);
+    t.world.protected = [{ x: -1920, y: 0, w: 500, h: 500 }];
+    expect(t.input({ t: "button", button: 0, down: false, x: 0, y: 0 })).toBe(true);
+    // "up" sem "down" nosso não sai.
+    expect(t.input({ t: "button", button: 2, down: false, x: 65535, y: 65535 })).toBe(false);
+  });
+  it("teclas não entram com o MyScreen em primeiro plano", () => {
+    t.world.appFocused = true;
+    expect(t.input({ t: "key", scancode: 0x1e, down: true })).toBe(false);
+    expect(t.input({ t: "text", text: "senha" })).toBe(false);
+  });
+  it("estouro do balde: descarta movimento; em evento confiável, revoga", () => {
+    let moves = 0;
+    for (let i = 0; i < 600; i++) if (t.input({ t: "move", x: i, y: i })) moves++;
+    expect(moves).toBeLessThan(480);
+    for (let i = 0; i < 600 && t.gate.active; i++) t.input({ t: "key", scancode: 0x1e, down: i % 2 === 0 });
+    expect(t.gate.active).toBeNull();
+    expect(t.sent.at(-1)?.msg).toEqual({ t: "revoke", sessionId: SESSION, reason: "error" });
+  });
+  it("pausado: só o que solta passa", () => {
+    t.input({ t: "key", scancode: 0x1d, down: true });
+    t.gate.setPaused(true);
+    expect(t.injected.at(-1)).toEqual({ t: "release" });
+    expect(t.input({ t: "move", x: 1, y: 1 })).toBe(false);
+    expect(t.input({ t: "key", scancode: 0x1e, down: true })).toBe(false);
+    expect(t.sent.at(-1)?.msg).toEqual({ t: "state", sessionId: SESSION, paused: true, why: "user" });
+  });
+});
+
+describe("revogação", () => {
+  beforeEach(() => t.grant());
+
+  const triggers: [string, () => void, string][] = [
+    ["parar", () => t.gate.end("user"), "user"],
+    ["pânico", () => t.gate.end("panic"), "panic"],
+    ["bloqueio", () => t.gate.end("locked"), "locked"],
+    ["compartilhamento parou", () => {
+      t.world.share = null;
+      t.gate.shareChanged();
+    }, "share-ended"],
+    ["trocou de tela", () => {
+      t.world.share = { kind: "screen", sourceName: "Monitor 2", trackSid: "TR_outra", physical: display };
+      t.gate.shareChanged();
+    }, "share-ended"],
+    ["reconexão com SID novo", () => t.gate.peerSeen(ana.identity, "PA_ana2"), "reconnected"],
+  ];
+  for (const [name, fire, reason] of triggers) {
+    it(`${name}: solta tudo ANTES de limpar o estado`, () => {
+      t.input({ t: "key", scancode: 0x2a, down: true });
+      t.log.length = 0;
+      fire();
+      expect(t.log).toEqual(["inject:release", "session:off"]);
+      expect(t.sent.at(-1)?.msg).toEqual({ t: "revoke", sessionId: SESSION, reason });
+      expect(t.input({ t: "move", x: 1, y: 1 })).toBe(false);
+    });
+  }
+  it("controlador saiu: solta tudo, sem mandar para quem já foi", () => {
+    const before = t.sent.length;
+    t.gate.peerGone(ana.identity, "left");
+    expect(t.log.slice(-2)).toEqual(["inject:release", "session:off"]);
+    expect(t.sent.length).toBe(before);
+  });
+  it("revoke vindo do controlador encerra", () => {
+    t.gate.handleCtl(ana, { t: "revoke", sessionId: SESSION, reason: "user" });
+    expect(t.gate.active).toBeNull();
+  });
+  it("ping vira pong só para a sessão certa", () => {
+    t.gate.handleCtl(ana, { t: "ping", sessionId: SESSION, n: 3 });
+    expect(t.sent.at(-1)?.msg).toEqual({ t: "pong", sessionId: SESSION, n: 3 });
+    const n = t.sent.length;
+    t.gate.handleCtl({ ...ana, sid: "PA_x" }, { t: "ping", sessionId: SESSION, n: 4 });
+    expect(t.sent.length).toBe(n);
+  });
+});

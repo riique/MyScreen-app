@@ -20,6 +20,8 @@ export interface TokenResponse {
   livekitUrl: string;
   participantIdentity: string;
   participantName: string;
+  /** HMAC do servidor sobre sala + identidade: só com ela a identidade é reusada. */
+  identityProof: string | null;
 }
 
 export interface CaptureSource {
@@ -66,6 +68,8 @@ export interface AppSettings {
   nickname: string;
   /** Baixa sozinho quando há versão nova; desligado, espera o botão "Baixar". */
   autoDownloadUpdates: boolean;
+  /** "Nunca aceitar pedidos de controle": o app nem anuncia que pode ser controlado. */
+  remoteControlDisabled: boolean;
 }
 
 export interface RoomState {
@@ -77,8 +81,12 @@ export interface RoomState {
 
 export interface SharingState {
   active: boolean;
+  /** Tela inteira ou janela: só tela inteira pode ser controlada. */
+  kind: "screen" | "window" | null;
   sourceName: string;
   displayId: string | null;
+  /** A publicação de tela no SFU: a sessão de controle fica presa a ela. */
+  trackSid: string | null;
   hideSelf: boolean;
   hasSystemAudio: boolean;
 }
@@ -93,6 +101,54 @@ export type UpdateStatus =
   | { state: "error"; message: string };
 
 export type ShortcutAction = "mic" | "cam" | "stop-share";
+
+// ---------------------------------------------------------------- controle remoto
+
+export interface RemoteCapabilities {
+  /** O injetor nativo carregou: este PC pode ser controlado. */
+  available: boolean;
+  reason: string | null;
+}
+
+/** Remetente de um pacote, como o SFU carimbou. */
+export interface RemotePeer {
+  identity: string;
+  sid: string;
+  name: string;
+}
+
+export interface RemoteConsentRequest {
+  reqId: string;
+  name: string;
+  identity: string;
+  sourceName: string;
+}
+
+export interface RemoteSessionInfo {
+  identity: string;
+  name: string;
+  paused: boolean;
+  elevated: boolean;
+}
+
+/** Mudança de sessão do lado controlado: começo, pausa, ou fim (com motivo). */
+export interface RemoteSessionEvent {
+  session: RemoteSessionInfo | null;
+  ended: { reason: string; identity: string; name: string } | null;
+}
+
+/** O que a barra "Fulano está controlando" mostra. */
+export interface ControlBarState {
+  name: string;
+  paused: boolean;
+  elevated: boolean;
+}
+
+export interface ControlBarBridge {
+  stop(): void;
+  pause(paused: boolean): void;
+  onState(cb: (state: ControlBarState) => void): () => void;
+}
 
 export interface DesktopBridge {
   app: {
@@ -115,6 +171,7 @@ export interface DesktopBridge {
       nickname: string;
       password?: string;
       participantIdentity?: string;
+      identityProof?: string;
     }): Promise<ApiResult<TokenResponse>>;
     desktopInfo(): Promise<ApiResult<{ minVersion: string | null }>>;
   };
@@ -140,6 +197,24 @@ export interface DesktopBridge {
     onLeaveRequest(cb: () => void): () => void;
     onStopShareRequest(cb: () => void): () => void;
     onAudioPauseChanged(cb: (paused: boolean) => void): () => void;
+  };
+  remote: {
+    capabilities(): Promise<RemoteCapabilities>;
+    /** Mensagem `rc.ctl` já validada pelo esquema, com o remetente do SFU. */
+    control(from: RemotePeer, msg: unknown): void;
+    /** Pacote `rc.in` cru: quem interpreta é o processo principal. */
+    input(from: RemotePeer, bytes: Uint8Array): void;
+    decide(reqId: string, allow: boolean): void;
+    peerSeen(identity: string, sid: string): void;
+    peerGone(identity: string): void;
+    roomLost(): void;
+    stop(): void;
+    pause(paused: boolean): void;
+    /** O processo principal pede para mandar um `rc.ctl` a alguém. */
+    onSend(cb: (to: string, msg: unknown) => void): () => void;
+    onConsent(cb: (req: RemoteConsentRequest) => void): () => void;
+    onConsentClosed(cb: (reqId: string) => void): () => void;
+    onSession(cb: (event: RemoteSessionEvent) => void): () => void;
   };
   updates: {
     status(): Promise<UpdateStatus>;

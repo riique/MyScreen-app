@@ -2,7 +2,7 @@
 name = "myscreen-native"
 version = "0.1.0"
 edition = "2021"
-description = "Som do sistema para o MyScreen (loopback por processo do WASAPI)"
+description = "Som do sistema (loopback por processo do WASAPI) e controle remoto (SendInput) do MyScreen"
 license = "MIT"
 publish = false
 
@@ -16,7 +16,13 @@ napi = { version = "3", features = ["napi6"] }
 napi-derive = "3"
 sysinfo = "0.39.6"
 wasapi = "0.25.0"
-windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+windows-sys = { version = "0.59", features = [
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_Foundation",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_System_Threading",
+  "Win32_Security",
+] }
 
 [build-dependencies]
 napi-build = "2"

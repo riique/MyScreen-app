@@ -100,6 +100,7 @@ export async function token(input: {
   nickname: string;
   password?: string;
   participantIdentity?: string;
+  identityProof?: string;
 }): Promise<ApiResult<TokenResponse>> {
   try {
     const { status, data, retryAfter } = await request("/api/livekit/token", { method: "POST", body: input });
@@ -117,6 +118,7 @@ export async function token(input: {
         livekitUrl: d.livekitUrl,
         participantIdentity: typeof d.participantIdentity === "string" ? d.participantIdentity : "",
         participantName: typeof d.participantName === "string" ? d.participantName : input.nickname,
+        identityProof: typeof d.identityProof === "string" ? d.identityProof : null,
       },
     };
   } catch (error) {

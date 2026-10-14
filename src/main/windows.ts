@@ -31,8 +31,8 @@ export function pageUrl(): string {
   return `${APP_ORIGIN}/`;
 }
 
-function preloadPath(): string {
-  return path.join(__dirname, "../preload/index.js");
+function preloadPath(name = "index"): string {
+  return path.join(__dirname, `../preload/${name}.js`);
 }
 
 function secureWebPreferences(extra?: BrowserWindowConstructorOptions["webPreferences"]) {
@@ -190,16 +190,28 @@ export function installWindowPolicies(): void {
 
 // ---------------------------------------------------------------- compartilhamento
 
-let sharing: SharingState = { active: false, sourceName: "", displayId: null, hideSelf: false, hasSystemAudio: false };
+let sharing: SharingState = {
+  active: false,
+  kind: null,
+  sourceName: "",
+  displayId: null,
+  trackSid: null,
+  hideSelf: false,
+  hasSystemAudio: false,
+};
 let powerBlocker: number | null = null;
+const sharingListeners = new Set<() => void>();
+/** Janelas que nunca aparecem na captura (a barra do controle remoto). */
+const alwaysProtected = new WeakSet<BrowserWindow>();
 
 function protectAll(on: boolean): void {
-  for (const win of BrowserWindow.getAllWindows()) win.setContentProtection(on);
+  for (const win of BrowserWindow.getAllWindows()) win.setContentProtection(on || alwaysProtected.has(win));
 }
 
 export function setSharing(state: SharingState): void {
   const was = sharing;
   sharing = state;
+  for (const fn of sharingListeners) fn();
   if (state.active) {
     if (powerBlocker === null) powerBlocker = powerSaveBlocker.start("prevent-display-sleep");
     protectAll(state.hideSelf);
@@ -212,4 +224,52 @@ export function setSharing(state: SharingState): void {
 
 export function isSharing(): boolean {
   return sharing.active;
+}
+
+export function getSharing(): SharingState {
+  return sharing;
+}
+
+export function onSharingChanged(fn: () => void): () => void {
+  sharingListeners.add(fn);
+  return () => sharingListeners.delete(fn);
+}
+
+// ---------------------------------------------------------------- barra do controle remoto
+
+export const CONTROL_BAR_SIZE = { width: 520, height: 46 };
+
+/**
+ * A barra "Fulano está controlando · Pausar · Parar": sempre no topo do monitor
+ * compartilhado, fora da captura (quem controla não a vê nem clica nela), sem
+ * roubar o foco do que está sendo controlado e sem X — só os botões fecham.
+ * O preload dela só expõe parar e pausar.
+ */
+export function createControlBarWindow(workArea: Electron.Rectangle): BrowserWindow {
+  const { width, height } = CONTROL_BAR_SIZE;
+  const win = new BrowserWindow({
+    width,
+    height,
+    x: Math.round(workArea.x + (workArea.width - width) / 2),
+    y: workArea.y + 8,
+    frame: false,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    closable: false,
+    skipTaskbar: true,
+    focusable: false,
+    show: false,
+    title: "MyScreen — controle remoto",
+    backgroundColor: "#b42318",
+    webPreferences: secureWebPreferences({ preload: preloadPath("controlbar") }),
+  });
+  alwaysProtected.add(win);
+  win.setContentProtection(true);
+  win.setAlwaysOnTop(true, "screen-saver");
+  win.once("ready-to-show", () => win.showInactive());
+  void win.loadURL(`${pageUrl()}#/control-bar`);
+  return win;
 }

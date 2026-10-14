@@ -8,6 +8,10 @@
 > Público: quem vai implementar. Onde há decisão, ela vem com o porquê. Onde há algo que só se
 > sabe medindo, está marcado como **medir no spike** — nenhum número de latência aqui é inventado.
 
+> **Estado (v1.1.0): fase 1 implementada** — desktop ↔ desktop, com "Enviar texto" (adiantado da
+> fase 2). Servidor: `canUpdateOwnMetadata` e `identityProof` no site. Pendente: spike/matriz
+> manual (seções 11.2 e 12, fase 0) em hardware real e as fases 2–4.
+
 ---
 
 ## 0. Resumo da decisão

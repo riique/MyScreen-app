@@ -1,9 +1,11 @@
 //! Addon nativo do MyScreen para Windows: som do sistema por loopback de
-//! processo, exposto ao Node via napi-rs. Roda dentro do utility process
-//! "audio" do Electron; se travar ou cair, a sala continua.
+//! processo e injeção de mouse/teclado do controle remoto, expostos ao Node via
+//! napi-rs. Cada parte roda no seu utility process ("audio" e "input"); se uma
+//! travar ou cair, a sala continua.
 
 pub mod capture;
 pub mod dsp;
+pub mod input;
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -191,4 +193,123 @@ pub fn pid_from_hwnd(hwnd: i64) -> u32 {
 #[napi]
 pub fn root_pid(pid: u32) -> u32 {
     capture::root_of(pid)
+}
+
+// ---------------------------------------------------------------- controle remoto
+
+#[napi(object)]
+pub struct ForegroundInfo {
+    pub pid: u32,
+    /// None: o Windows não deixou saber (processo protegido ou de outro usuário).
+    pub elevated: Option<bool>,
+}
+
+/// Injeta mouse e teclado (`SendInput`). Coordenadas em pixels físicos da área
+/// de trabalho virtual — a conversão do quadro de vídeo para pixel é do
+/// processo principal, que também decide se o evento pode entrar.
+#[napi]
+pub struct InputInjector {
+    pressed: input::Pressed,
+}
+
+fn sent(n: u32, want: usize) -> Result<()> {
+    if n as usize == want {
+        Ok(())
+    } else {
+        Err(Error::from_reason(format!("SendInput aceitou {n} de {want}")))
+    }
+}
+
+#[napi]
+impl InputInjector {
+    #[napi(constructor)]
+    pub fn new() -> Self {
+        Self { pressed: input::Pressed::default() }
+    }
+
+    #[napi]
+    pub fn move_to(&self, px: i32, py: i32) -> Result<()> {
+        sent(input::sys::send(&[input::sys::move_input(px, py)]), 1)
+    }
+
+    /// Move para (px, py) e aperta/solta o botão, num `SendInput` só.
+    #[napi]
+    pub fn button(&mut self, button: u8, down: bool, px: i32, py: i32) -> Result<()> {
+        let (flags, data) = input::button_event(button, down)
+            .ok_or_else(|| Error::new(Status::InvalidArg, format!("botao invalido: {button}")))?;
+        self.pressed.button(button, down);
+        sent(
+            input::sys::send(&[input::sys::move_input(px, py), input::sys::button_input(flags, data)]),
+            2,
+        )
+    }
+
+    /// Roda em unidades de `WHEEL_DELTA` (120 por dente); dy positivo = para cima.
+    #[napi]
+    pub fn wheel(&self, dx: i32, dy: i32, px: i32, py: i32) -> Result<()> {
+        let mut inputs = vec![input::sys::move_input(px, py)];
+        inputs.extend(input::sys::wheel_inputs(dx, dy));
+        let want = inputs.len();
+        sent(input::sys::send(&inputs), want)
+    }
+
+    /// Tecla física por scancode (set 1; bit 0x100 = estendida).
+    #[napi]
+    pub fn key(&mut self, scancode: u16, down: bool) -> Result<()> {
+        self.pressed.key(scancode, down);
+        sent(input::sys::send(&[input::sys::key_input(scancode, down)]), 1)
+    }
+
+    /// Digita o texto caractere a caractere (`KEYEVENTF_UNICODE`): não depende
+    /// do layout de teclado de nenhum dos lados.
+    #[napi]
+    pub fn text(&self, s: String) -> Result<()> {
+        let mut inputs = Vec::new();
+        for step in input::text_steps(&s) {
+            match step {
+                input::TextStep::Unit(u) => {
+                    inputs.push(input::sys::unicode_input(u, true));
+                    inputs.push(input::sys::unicode_input(u, false));
+                }
+                input::TextStep::Scancode(sc) => {
+                    inputs.push(input::sys::key_input(sc, true));
+                    inputs.push(input::sys::key_input(sc, false));
+                }
+            }
+        }
+        let want = inputs.len();
+        sent(input::sys::send(&inputs), want)
+    }
+
+    /// Solta toda tecla e botão que o controle remoto deixou apertado.
+    #[napi]
+    pub fn release_all(&mut self) -> Result<()> {
+        let (keys, buttons) = self.pressed.drain();
+        let mut inputs = Vec::new();
+        for sc in keys {
+            inputs.push(input::sys::key_input(sc, false));
+        }
+        for b in buttons {
+            if let Some((flags, data)) = input::button_event(b, false) {
+                inputs.push(input::sys::button_input(flags, data));
+            }
+        }
+        let want = inputs.len();
+        if want == 0 {
+            return Ok(());
+        }
+        sent(input::sys::send(&inputs), want)
+    }
+
+    #[napi]
+    pub fn foreground(&self) -> ForegroundInfo {
+        let (pid, elevated) = input::sys::foreground();
+        ForegroundInfo { pid, elevated }
+    }
+
+    /// O próprio MyScreen roda como administrador? (Aí o UIPI não bloqueia.)
+    #[napi]
+    pub fn self_elevated(&self) -> bool {
+        input::sys::self_elevated()
+    }
 }

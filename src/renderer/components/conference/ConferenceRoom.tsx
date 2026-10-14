@@ -7,6 +7,7 @@ import {
   useIsMuted,
   useIsSpeaking,
   useLocalParticipant,
+  useParticipantAttribute,
   useParticipants,
   useRoomContext,
   useTracks,
@@ -35,6 +36,7 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AudioCapabilities, CaptureSource, SystemAudioMode } from "@shared/ipc";
 import { RESOLUTION, SCREEN_BITRATE, screenBitrate } from "@shared/media";
+import { ATTR_VERSION, RC_VERSION } from "@shared/remote/protocol";
 import { ChatSidebar } from "./ChatSidebar";
 import { MediaControls } from "./MediaControls";
 import { ParticipantsList } from "./ParticipantsList";
@@ -42,6 +44,12 @@ import { SettingsModal, type MediaSettings } from "./SettingsModal";
 import { ShareDialog } from "./ShareDialog";
 import { SystemAudioControl } from "./SystemAudioControl";
 import { TrackStatsDropdown } from "./TrackStatsDropdown";
+import { ConsentDialog } from "./remote/ConsentDialog";
+import { ControlOverlay } from "./remote/ControlOverlay";
+import { ControlToolbar } from "./remote/ControlToolbar";
+import { PANIC_SHORTCUT_LABEL } from "./remote/labels";
+import { useRemoteControlHost, type HostShare } from "./remote/useRemoteControlHost";
+import { useRemoteControlViewer, type RemoteViewer } from "./remote/useRemoteControlViewer";
 import {
   readCapture,
   readSystemAudio,
@@ -65,6 +73,7 @@ import {
   MessageSquare,
   MicOff,
   MonitorUp,
+  MousePointer2,
   PictureInPicture2,
   Pin,
   PinOff,
@@ -275,6 +284,24 @@ function ConferenceStage({ roomId, token, onLeave }: { roomId: string; token: st
     }
   }, [chat.chatMessages]);
 
+  /* --- Controle remoto ----------------------------------------------------
+     Os dois papéis vivem na mesma sala: quem é controlado (o processo
+     principal decide tudo) e quem controla (só manda eventos). */
+  // O que está no ar (só tela inteira pode ser controlada).
+  const [hostShare, setHostShare] = useState<HostShare | null>(null);
+  const [remoteDisabled, setRemoteDisabled] = useState(false);
+  useEffect(() => {
+    void window.myscreen.settings.get().then((s) => setRemoteDisabled(s.remoteControlDisabled));
+  }, []);
+  const remoteHost = useRemoteControlHost({
+    room,
+    share: hostShare,
+    disabled: remoteDisabled,
+    myName: localParticipant.name || localParticipant.identity || "você",
+    sendChat: chat.send,
+  });
+  const remoteViewer = useRemoteControlViewer(room);
+
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
   const [controlError, setControlError] = useState<string | null>(null);
@@ -342,7 +369,16 @@ function ConferenceStage({ roomId, token, onLeave }: { roomId: string; token: st
 
   const endSharing = useCallback(() => {
     stopSystemAudio();
-    window.myscreen.room.setSharing({ active: false, sourceName: "", displayId: null, hideSelf: false, hasSystemAudio: false });
+    setHostShare(null);
+    window.myscreen.room.setSharing({
+      active: false,
+      kind: null,
+      sourceName: "",
+      displayId: null,
+      trackSid: null,
+      hideSelf: false,
+      hasSystemAudio: false,
+    });
   }, [stopSystemAudio]);
 
   // A tela pode parar sem passar pelo botão (janela capturada fechou, barra
@@ -527,13 +563,17 @@ function ConferenceStage({ roomId, token, onLeave }: { roomId: string; token: st
         }
       }
 
+      const trackSid = localParticipant.getTrackPublication(Track.Source.ScreenShare)?.trackSid ?? null;
       window.myscreen.room.setSharing({
         active: true,
+        kind: source.kind,
         sourceName: source.name,
         displayId: source.displayId,
+        trackSid,
         hideSelf: next.hideSelf,
         hasSystemAudio: false,
       });
+      setHostShare({ kind: source.kind, display: source.detail ? source.detail.replace(/\s*×\s*/, "x") : null });
 
       if (native) {
         const mode: SystemAudioMode = { kind: "system-except-self", alsoExcludeDiscord: nextAudio.excludeDiscord };
@@ -561,8 +601,10 @@ function ConferenceStage({ roomId, token, onLeave }: { roomId: string; token: st
           setSystemAudioActive(true);
           window.myscreen.room.setSharing({
             active: true,
+            kind: source.kind,
             sourceName: source.name,
             displayId: source.displayId,
+            trackSid,
             hideSelf: next.hideSelf,
             hasSystemAudio: true,
           });
@@ -840,6 +882,14 @@ function ConferenceStage({ roomId, token, onLeave }: { roomId: string; token: st
   const notices = [
     screenShareError ? { key: "screen", text: screenShareError, dismiss: () => setScreenShareError(null) } : null,
     controlError ? { key: "control", text: controlError, dismiss: () => setControlError(null) } : null,
+    remoteViewer.notice ? { key: "remote", text: remoteViewer.notice, dismiss: remoteViewer.dismissNotice } : null,
+    remoteViewer.state.phase === "requesting"
+      ? {
+          key: "remote-wait",
+          text: `Aguardando ${remoteViewer.state.targetName} permitir o controle…`,
+          dismiss: remoteViewer.cancel,
+        }
+      : null,
     unstableConnection
       ? {
           key: "net",
@@ -868,6 +918,7 @@ function ConferenceStage({ roomId, token, onLeave }: { roomId: string; token: st
     fullscreenEl,
     onTogglePin: togglePin,
     onToggleFullscreen: toggleFullscreen,
+    remote: remoteViewer,
   };
 
   return (
@@ -896,6 +947,14 @@ function ConferenceStage({ roomId, token, onLeave }: { roomId: string; token: st
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
+          {remoteHost.session ? (
+            <ControlledPill
+              name={remoteHost.session.name}
+              paused={remoteHost.session.paused}
+              onPause={() => remoteHost.pause(!remoteHost.session?.paused)}
+              onStop={remoteHost.stop}
+            />
+          ) : null}
           <CopyLinkButton url={platform.inviteUrl(roomId)} />
           <span aria-hidden className="mx-1 h-4 w-px bg-rule-2" />
           <BarToggle
@@ -1069,6 +1128,10 @@ function ConferenceStage({ roomId, token, onLeave }: { roomId: string; token: st
         devices={devices}
       />
 
+      {remoteHost.consent ? (
+        <ConsentDialog key={remoteHost.consent.reqId} request={remoteHost.consent} onDecide={remoteHost.decide} />
+      ) : null}
+
       <ShareDialog
         open={isShareDialogOpen}
         initial={capture}
@@ -1225,6 +1288,7 @@ type TileShared = {
   fullscreenEl: Element | null;
   onTogglePin: (key: string) => void;
   onToggleFullscreen: (element: Element | null) => void;
+  remote: RemoteViewer;
 };
 
 /* ---------------------------------------------------------------------------
@@ -1382,6 +1446,7 @@ function Tile({
   fullscreenEl,
   onTogglePin,
   onToggleFullscreen,
+  remote,
 }: {
   trackRef: TrackReferenceOrPlaceholder;
   variant: "stage" | "grid" | "strip";
@@ -1405,6 +1470,17 @@ function Tile({
   const name = participant.name || participant.identity || (participant.isLocal ? "Você" : "Participante");
   const label = trackLabel(trackRef);
   const small = variant === "strip";
+
+  // Controle remoto: só a tela de quem anuncia `rc.v` compatível (app de
+  // Windows, tela inteira, recurso ligado) oferece "Pedir controle".
+  const rcVersion = useParticipantAttribute(ATTR_VERSION, { participant });
+  const rs = remote.state;
+  const isTarget = rs.phase !== "idle" && rs.target === participant.identity && isScreen;
+  const controlling =
+    isTarget && rs.phase === "active" && hasVideo && trackRef.publication?.trackSid === rs.trackSid;
+  const requesting = isTarget && rs.phase === "requesting";
+  const canRequest =
+    isScreen && !participant.isLocal && hasVideo && rcVersion === String(RC_VERSION) && rs.phase === "idle";
 
   // Em tela cheia, nome e ações só aparecem quando o mouse mexe, e somem (com
   // o cursor) depois de um tempo parado: o quadro é para ser assistido.
@@ -1451,15 +1527,18 @@ function Tile({
   return (
     <div
       ref={ref}
-      onDoubleClick={() => onToggleFullscreen(ref.current)}
+      // Controlando, o duplo clique e o botão direito são do PC remoto.
+      onDoubleClick={() => {
+        if (!controlling) onToggleFullscreen(ref.current);
+      }}
       onContextMenu={(event) => {
         event.preventDefault();
-        setMenu({ x: event.clientX, y: event.clientY });
+        if (!controlling) setMenu({ x: event.clientX, y: event.clientY });
       }}
       className={cn(
         "group relative flex h-full w-full items-center justify-center overflow-hidden bg-monitor ring-1 ring-rule [border-radius:var(--radius-sheet)]",
         "outline outline-2 -outline-offset-2 transition-[outline-color] duration-200",
-        speaking && !isScreen ? "outline-signal" : "outline-transparent",
+        controlling ? "outline-[#d92d20]" : speaking && !isScreen ? "outline-signal" : "outline-transparent",
         isFullscreen && "[border-radius:0]",
         chromeHidden && "cursor-none",
       )}
@@ -1485,6 +1564,19 @@ function Tile({
         </span>
       )}
 
+      {controlling && rs.phase === "active" ? (
+        <>
+          <ControlOverlay send={remote.send} label={`Tela de ${name}, controlada por você`} />
+          <ControlToolbar
+            state={rs}
+            hidden={chromeHidden}
+            onFullscreen={() => onToggleFullscreen(ref.current)}
+            onStop={remote.stop}
+            send={remote.send}
+          />
+        </>
+      ) : null}
+
       {/* Identificação: sempre legível sobre qualquer imagem. */}
       <div
         className={cn(
@@ -1504,6 +1596,7 @@ function Tile({
       {/* Ações do quadro: aparecem no hover e no foco; no toque, sempre. Em
           tela cheia, só enquanto o mouse se mexe. */}
       <div
+        hidden={controlling}
         className={cn(
           "absolute top-2 right-2 flex gap-1 transition-opacity duration-150",
           isFullscreen
@@ -1515,6 +1608,16 @@ function Tile({
       >
         {isScreen && !participant.isLocal ? (
           <ScreenVolume participant={participant as RemoteParticipant} />
+        ) : null}
+        {canRequest ? (
+          <TileAction label={`Pedir para controlar a tela de ${name}`} onClick={() => remote.request(participant)}>
+            <MousePointer2 size={14} strokeWidth={1.75} aria-hidden />
+          </TileAction>
+        ) : null}
+        {requesting ? (
+          <TileAction label="Cancelar o pedido de controle" onClick={remote.cancel}>
+            <X size={14} strokeWidth={1.75} aria-hidden />
+          </TileAction>
         ) : null}
         {variant === "strip" && canSideBySide ? (
           <TileAction
@@ -1548,6 +1651,13 @@ function Tile({
           y={menu.y}
           onClose={() => setMenu(null)}
           items={[
+            canRequest
+              ? {
+                  label: "Pedir controle",
+                  icon: <MousePointer2 size={14} strokeWidth={1.75} aria-hidden />,
+                  onSelect: () => remote.request(participant),
+                }
+              : null,
             {
               label: "Abrir em nova janela",
               icon: <ExternalLink size={14} strokeWidth={1.75} aria-hidden />,
@@ -1849,6 +1959,49 @@ function BarToggle({
         </span>
       ) : null}
     </button>
+  );
+}
+
+/**
+ * Na barra da sala de quem está sendo controlado: quem controla, pausar e
+ * parar. A barra vermelha no topo do monitor faz o mesmo fora do app.
+ */
+function ControlledPill({
+  name,
+  paused,
+  onPause,
+  onStop,
+}: {
+  name: string;
+  paused: boolean;
+  onPause: () => void;
+  onStop: () => void;
+}) {
+  return (
+    <div
+      role="status"
+      className="mr-1 flex h-9 items-center gap-1 border border-alert-line bg-alert-wash pr-1 pl-2.5 text-[0.8125rem] text-alert [border-radius:var(--radius-cell)]"
+      title={`Parar a qualquer momento: ${PANIC_SHORTCUT_LABEL}`}
+    >
+      <span aria-hidden className={cn("size-2 shrink-0 rounded-full bg-[#d92d20]", !paused && "animate-pulse")} />
+      <span className="max-w-[14rem] truncate font-medium">
+        {paused ? `Controle de ${name} pausado` : `${name} está controlando`}
+      </span>
+      <button
+        type="button"
+        onClick={onPause}
+        className="ml-1 h-7 px-2 text-[0.75rem] font-semibold transition-colors hover:bg-alert-wash-2 [border-radius:var(--radius-cell)]"
+      >
+        {paused ? "Retomar" : "Pausar"}
+      </button>
+      <button
+        type="button"
+        onClick={onStop}
+        className="h-7 bg-[#b42318] px-2.5 text-[0.75rem] font-semibold text-white transition-colors hover:bg-[#912018] [border-radius:var(--radius-cell)]"
+      >
+        Parar
+      </button>
+    </div>
   );
 }
 

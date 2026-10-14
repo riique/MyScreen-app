@@ -20,6 +20,8 @@ type Session = {
   serverUrl: string;
   nickname: string;
   identity: string;
+  /** Prova do servidor para reusar `identity` no refresh (sem ela, identidade nova). */
+  identityProof: string | null;
   /** Só na memória: o refresh do token precisa dela, o disco nunca a vê. */
   password?: string;
   media: Pick<GreenRoomJoinConfig, "audioEnabled" | "videoEnabled" | "audioDeviceId" | "videoDeviceId">;
@@ -90,6 +92,7 @@ export function RoomScreen({ roomId, onLeave }: { roomId: string; onLeave: () =>
           serverUrl: data.livekitUrl,
           nickname: config.nickname,
           identity: data.participantIdentity,
+          identityProof: data.identityProof,
           password: config.password,
           media: {
             audioEnabled: config.audioEnabled,
@@ -118,9 +121,19 @@ export function RoomScreen({ roomId, onLeave }: { roomId: string; onLeave: () =>
         roomId,
         nickname: s.nickname,
         participantIdentity: s.identity || undefined,
+        identityProof: s.identityProof ?? undefined,
         password: s.password,
       });
-      setSession((cur) => (cur ? { ...cur, token: data.token, identity: data.participantIdentity || cur.identity } : cur));
+      setSession((cur) =>
+        cur
+          ? {
+              ...cur,
+              token: data.token,
+              identity: data.participantIdentity || cur.identity,
+              identityProof: data.identityProof ?? cur.identityProof,
+            }
+          : cur,
+      );
     } catch {
       // Renovar é rotina: falhar aqui não pode derrubar a chamada.
     }

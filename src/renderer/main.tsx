@@ -7,16 +7,26 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { bootTheme } from "./lib/theme";
+import { ControlBar } from "./pages/ControlBar";
 import { desktopPlatform, loadServerUrl, PlatformProvider } from "./platform";
 
-bootTheme();
-
-void loadServerUrl().finally(() => {
+// A barra do controle remoto é a mesma página, noutra janela e com outro
+// preload (sem `window.myscreen`).
+if (location.hash === "#/control-bar") {
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
-      <PlatformProvider value={desktopPlatform}>
-        <App />
-      </PlatformProvider>
+      <ControlBar />
     </StrictMode>,
   );
-});
+} else {
+  bootTheme();
+  void loadServerUrl().finally(() => {
+    createRoot(document.getElementById("root")!).render(
+      <StrictMode>
+        <PlatformProvider value={desktopPlatform}>
+          <App />
+        </PlatformProvider>
+      </StrictMode>,
+    );
+  });
+}

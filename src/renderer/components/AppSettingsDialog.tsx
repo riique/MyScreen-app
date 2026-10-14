@@ -55,6 +55,11 @@ export function AppSettingsDialog({ open, onClose }: { open: boolean; onClose: (
     if (r.ok) setSettings(r.data);
   }
 
+  async function toggleRemoteDisabled(on: boolean) {
+    const r = await window.myscreen.settings.set({ remoteControlDisabled: on });
+    if (r.ok) setSettings(r.data);
+  }
+
   async function toggleAutoDownload(on: boolean) {
     const r = await window.myscreen.settings.set({ autoDownloadUpdates: on });
     if (r.ok) setSettings(r.data);
@@ -152,6 +157,18 @@ export function AppSettingsDialog({ open, onClose }: { open: boolean; onClose: (
               onChange={(v) => void toggleShortcuts(v)}
               label="Ligar atalhos durante a chamada"
               note="Funcionam com o app fora de foco: Ctrl+Shift+M (microfone), Ctrl+Shift+V (câmera), Ctrl+Shift+S (parar a tela)."
+            />
+          </div>
+
+          <div>
+            <h3 className="border-b border-rule pb-2 text-[0.875rem] font-semibold text-ink">Controle remoto</h3>
+            <CheckCell
+              name="set-remote-disabled"
+              checked={settings?.remoteControlDisabled ?? false}
+              disabled={!settings}
+              onChange={(v) => void toggleRemoteDisabled(v)}
+              label="Nunca aceitar pedidos de controle"
+              note="Com a tela inteira no ar, quem está na sala pode pedir para controlar o seu mouse e teclado — só com o seu clique em “Permitir”. Ligado, ninguém nem vê a opção de pedir. Durante um controle, Ctrl+Alt+Shift+S encerra na hora."
             />
           </div>
 
