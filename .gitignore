@@ -1,0 +1,7 @@
+node_modules/
+dist/
+release/
+native/target/
+native/*.node
+*.log
+.DS_Store

@@ -1,0 +1,367 @@
+@import "tailwindcss";
+
+/* ============================================================================
+   A CUT SHEET — design tokens
+
+   O mundo: a lista de decisão de edição de broadcasting. Papel sobre a mesa,
+   fios de cabelo, tinta quase preta, grafite para o que não foi medido, e
+   exatamente um sinal — o azul de líder, que é tinta impressa, não brilho de
+   interface. Profundidade vem de fio e de papel levantado, nunca de sombra
+   decorativa; raio máximo de 3px porque uma folha de corte não tem cantos
+   redondos.
+
+   Regra que mantém esta lista honesta: um token que ninguém usa é token
+   morto — e um hex repetido em classe é a mesma mentira com mais cópias.
+   Atenção, aviso e a face escura do monitor entram aqui como nomes, não como
+   literais espalhados por catorze arquivos.
+   ========================================================================== */
+@theme {
+  /* --- Superfícies: mesa, folha, banda --- */
+  --color-paper: #fafaf9; /* a mesa: o fundo da página */
+  --color-sheet: #ffffff; /* a folha em cima da mesa */
+  --color-band: #f8f8f7; /* banda recuada dentro da folha */
+  --color-band-2: #f1f1ef; /* banda pressionada / cabeçalho de tabela */
+
+  /* --- Tinta ---
+     ink-3 é o grafite: é o mais claro que ainda passa 4.5:1 tanto na folha
+     (#ffffff) quanto na mesa (#f2f2ef) — 4.9:1 e 4.9:1. ink-4 mede 2.7:1 e
+     NÃO é texto em lugar nenhum: existe para fio desativado e borda. */
+  --color-ink: #16171a; /* texto primário — 16.9:1 na folha */
+  --color-ink-2: #4b4e55; /* texto secundário — 8.4:1 */
+  --color-ink-3: #676b74; /* grafite, placeholder — 4.9:1 */
+  --color-ink-4: #9a9ea6; /* só fio e borda; NUNCA texto */
+
+  /* --- Fios ---
+     A régua é load-bearing neste mundo: se o fio ficar frouxo a página vira
+     uma planilha. rule é a linha de dentro, rule-2 a borda de bloco, rule-3 a
+     moldura externa. */
+  --color-rule: #e7e7e4;
+  --color-rule-2: #d4d4cf;
+  --color-rule-3: #a9a9a2;
+
+  /* --- Sinal: um só ---
+     Azul de líder de broadcasting, impresso. Reservado para a ação primária e
+     para o estado ao vivo. Estado não é cor neste mundo: é valor de coluna. */
+  --color-signal: #1b3a7d; /* 10.8:1 sobre a folha */
+  --color-signal-2: #142c5c; /* pressionado */
+  --color-signal-wash: #eef1f7; /* preenchimento de célula selecionada */
+  --color-signal-line: #b9c6e0; /* fio de célula em foco */
+  --color-on-signal: #ffffff;
+
+  /* --- Atenção ---
+     Não é uma segunda cor de marca: é a folha marcando que algo travou. O
+     vermelho passa 7.5:1 e nunca carrega um byte de URL. */
+  --color-alert: #8f2a1c;
+  --color-alert-line: #d9b3ac;
+  --color-alert-wash: #fbf1ef;
+  --color-warn: #8a5a12; /* texto de aviso, 6.0:1 */
+  --color-warn-dot: #c08a2a; /* a marca sólida do aviso */
+  --color-alert-line-2: #b9705f;
+  --color-alert-wash-2: #f7e6e2;
+  --color-signal-wash-2: #e4e9f3;
+
+  /* --- A face do instrumento ---
+     O monitor é escuro de propósito: é contra um fundo neutro que se avalia o
+     que está sendo mostrado. Ink sobre ele é mais claro que ink-3 porque o
+     fundo aqui é o monitor, não a folha. */
+  --color-monitor: #101114;
+  --color-monitor-ink: #8e9299;
+
+  /* --- Tons de apoio ---
+     Variantes um passo mais fundo dos avisos, usadas só no estado pressionado
+     ou no hover da tecla que sai da sala. */
+
+  /* --- Papel dobrado ---
+     Uma folha que levanta da mesa projeta um difusão curta e desviada. Offset
+     e blur reais: sem isso é halo decorativo. */
+  --shadow-lift: 0 1px 2px rgb(22 23 26 / 0.04), 0 12px 32px -18px rgb(22 23 26 / 0.16);
+  --shadow-overlay: 0 2px 6px rgb(22 23 26 / 0.06), 0 32px 64px -24px rgb(22 23 26 / 0.3);
+  --color-scrim: rgb(22 23 26 / 0.32);
+
+  /* --- Tipografia --- */
+  --font-sans: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-spline-mono), ui-monospace, "SFMono-Regular", monospace;
+
+  --radius-sheet: 10px;
+  --radius-cell: 8px;
+
+  /* --- Ritmo ---
+     Uma escala só em toda a página. Mais espaço acima de um título do que
+     abaixo dele é regra de sala, não de token. */
+  --spacing-band: 2.25rem;
+  --spacing-cell: 0.5rem;
+}
+
+/* ============================================================================
+   Tema escuro
+
+   A mesma folha, impressa em negativo. A mesa é quase preta, a folha sobe um
+   passo de luminância em vez de projetar sombra (sombra não se lê no escuro),
+   e o azul de líder clareia para continuar 4.5:1+ sobre a folha. O botão
+   primário inverte: fundo claro, tinta escura — branco sobre azul médio não
+   passa contraste.
+
+   Os mesmos nomes de token: nenhum componente sabe em que tema está.
+   ========================================================================== */
+:root {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-paper: #0b0b0c;
+  --color-sheet: #131315;
+  --color-band: #18181a;
+  --color-band-2: #1f1f22;
+
+  --color-ink: #ededee; /* 15.9:1 na folha */
+  --color-ink-2: #b3b4b9; /* 8.9:1 */
+  --color-ink-3: #8a8c93; /* 5.4:1 */
+  --color-ink-4: #55575d;
+
+  --color-rule: #242427;
+  --color-rule-2: #333336;
+  --color-rule-3: #4a4a4f;
+
+  --color-signal: #a8bcf0; /* 10.1:1 na folha */
+  --color-signal-2: #c2d0f6;
+  --color-signal-wash: #19203a;
+  --color-signal-wash-2: #212a4a;
+  --color-signal-line: #34477e;
+  --color-on-signal: #0c1430;
+
+  --color-alert: #f0a294;
+  --color-alert-line: #5c2b23;
+  --color-alert-line-2: #844033;
+  --color-alert-wash: #24130f;
+  --color-alert-wash-2: #301913;
+  --color-warn: #e2b66b;
+
+  --color-monitor: #050506;
+  --color-monitor-ink: #8a8c93;
+
+  --shadow-lift: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 12px 32px -18px rgb(0 0 0 / 0.7);
+  --shadow-overlay: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 32px 64px -24px rgb(0 0 0 / 0.8);
+  --color-scrim: rgb(0 0 0 / 0.6);
+}
+
+/* A troca de tema é instantânea na carga e suave só quando a pessoa clica:
+   o script de tema liga esta classe por um instante. */
+:root.theme-switching *,
+:root.theme-switching *::before,
+:root.theme-switching *::after {
+  transition:
+    background-color 220ms cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 220ms cubic-bezier(0.16, 1, 0.3, 1),
+    color 220ms cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+/* Tailwind v4 pinta borda sem cor em currentColor: um `border-r` esquecido
+   vira fio de tinta preta (ou branca, no escuro). O padrão é o fio da folha. */
+@layer base {
+  *,
+  ::before,
+  ::after,
+  ::backdrop {
+    border-color: var(--color-rule);
+  }
+}
+
+/* Rótulo de coluna: sans pequena, em grafite. Antes era mono em caixa alta com
+   tracking aberto — ruído demais repetido em cada campo. O valor é que é dado;
+   o rótulo só nomeia. */
+@layer components {
+  .label-col {
+    font-family: var(--font-sans);
+    font-size: 0.75rem;
+    font-weight: 500;
+    line-height: 1.3;
+    letter-spacing: 0.002em;
+    color: var(--color-ink-3);
+  }
+}
+
+/* ============================================================================
+   Base
+   ========================================================================== */
+html,
+body {
+  /* No mobile 100vh inclui a barra de endereço e corta o conteúdo; 100dvh
+     acompanha a altura visível real. O 100vh fica como fallback. */
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+body {
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  /* `clip` em vez de `hidden`: `hidden` no body cria contexto de rolagem e
+     mascara transbordo real em vez de impedir que ele exista. */
+  overflow-x: clip;
+  text-rendering: optimizeLegibility;
+}
+
+/* Superfícies de navegador que ninguém desenha e que todo site entrega sem
+   design. São o sinal mais barato de que a página foi construída em vez de
+   montada, e o que um modelo mais pula. */
+
+/* Seleção: o azul de líder diluído, com a tinta preservada em cima. */
+::selection {
+  background-color: color-mix(in srgb, var(--color-signal) 18%, transparent);
+  color: var(--color-ink);
+}
+
+/* Foco: um retângulo de fio com deslocamento de tinta, coerente com o mundo
+   (marcar a célula, não desenhar um halo). */
+:focus-visible {
+  outline: 2px solid var(--color-signal);
+  outline-offset: 2px;
+  border-radius: var(--radius-cell);
+}
+
+a,
+button,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Numeral tabulado por padrão: numa folha pautada, coluna de número que não
+   alinha é coluna quebrada. */
+input,
+select,
+textarea,
+button {
+  font-variant-numeric: tabular-nums;
+}
+
+::placeholder {
+  color: var(--color-ink-3);
+  opacity: 1;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-paper);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-rule-2);
+  border: 3px solid var(--color-paper);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-rule-3);
+}
+::-webkit-scrollbar-corner {
+  background: var(--color-paper);
+}
+
+/* ============================================================================
+   A marca da emenda
+
+   Interação-assinatura: quando o valor de uma célula muda, a folha registra a
+   emenda. O valor antigo entra em grafite e riscado, o novo assenta em tinta.
+   A animação parte de um estado já visível — nada aqui esconde conteúdo, e o
+   ease é exponencial de saída.
+   ========================================================================== */
+@keyframes ink-settle {
+  from {
+    opacity: 0.35;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.amended {
+  animation: ink-settle 260ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes rule-draw {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.rule-draw {
+  transform-origin: left center;
+  animation: rule-draw 420ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ============================================================================
+   Ponte com o SDK
+
+   Única classe do LiveKit renderizada pelo app: o <VideoTrack> do
+   @livekit/components-react escreve `lk-video-container`. As demais
+   (lk-participant-tile, lk-focus-layout, lk-grid-layout) pertencem a
+   componentes que este app não usa — regra para elas seria CSS morto.
+   ======================================================================== */
+.lk-video-container {
+  background-color: var(--color-band-2) !important;
+  border-radius: var(--radius-sheet) !important;
+  overflow: hidden;
+}
+
+/* ============================================================================
+   Desktop
+
+   As fontes vêm empacotadas (@fontsource): o app não depende de rede para
+   desenhar texto. A barra superior é a área de arrastar da janela; os botões
+   nativos (minimizar, maximizar, fechar) ficam sobrepostos à direita.
+   ========================================================================== */
+:root {
+  --font-archivo: "Archivo Variable";
+  --font-spline-mono: "Spline Sans Mono";
+  --titlebar-controls: 140px;
+}
+
+.app-drag {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.app-drag button,
+.app-drag a,
+.app-drag input,
+.app-drag select,
+.app-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* O espaço dos botões de janela: sem isto, o último botão da barra fica por
+   baixo do "fechar" do Windows. */
+.titlebar-pad {
+  padding-right: calc(var(--titlebar-controls) + 0.5rem);
+}
+
+/* Em tela cheia o Windows esconde os botões sobrepostos. */
+:fullscreen .titlebar-pad {
+  padding-right: 0.75rem;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}

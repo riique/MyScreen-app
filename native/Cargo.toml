@@ -1,0 +1,27 @@
+[package]
+name = "myscreen-native"
+version = "0.1.0"
+edition = "2021"
+description = "Som do sistema para o MyScreen (loopback por processo do WASAPI)"
+license = "MIT"
+publish = false
+
+[lib]
+# cdylib vira o .node carregado pelo Electron; rlib deixa o `cargo test` rodar
+# a parte de DSP sem Node.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+napi = { version = "3", features = ["napi6"] }
+napi-derive = "3"
+sysinfo = "0.39.6"
+wasapi = "0.25.0"
+windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+
+[build-dependencies]
+napi-build = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

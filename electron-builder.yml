@@ -1,0 +1,47 @@
+# Instalador NSIS por usuário (sem administrador) + feed do electron-updater
+# servido pelo próprio servidor MyScreen em /downloads/.
+appId: com.myscreen.desktop
+productName: MyScreen
+copyright: MyScreen — MIT
+artifactName: MyScreen-Setup-${version}.${ext}
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**
+  - package.json
+  - "!**/*.map"
+asar: true
+# O addon nativo não carrega de dentro do asar: vai em resources/native.
+extraResources:
+  - from: native/myscreen-native.node
+    to: native/myscreen-native.node
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.ico
+  executableName: MyScreen
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createStartMenuShortcut: true
+  createDesktopShortcut: true
+  shortcutName: MyScreen
+  deleteAppDataOnUninstall: false
+protocols:
+  - name: MyScreen
+    schemes: [myscreen]
+publish:
+  provider: generic
+  # Trocado em tempo de execução pela URL de Configurações → Servidor.
+  url: https://myscreen.haumea.fun/downloads/
+electronFuses:
+  runAsNode: false
+  enableNodeCliInspectArguments: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  enableCookieEncryption: true
+  grantFileProtocolExtraPrivileges: false
