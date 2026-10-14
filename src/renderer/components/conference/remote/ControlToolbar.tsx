@@ -24,9 +24,11 @@ export function ControlToolbar({
   const pausedText =
     state.why === "elevated"
       ? `${state.targetName} está numa janela de administrador; só ele pode clicar nela.`
-      : state.paused
-        ? `${state.targetName} pausou o controle.`
-        : null;
+      : state.why === "protected"
+        ? `O MyScreen de ${state.targetName} está em primeiro plano, e as teclas não chegam nele. Clique em outra janela da tela de ${state.targetName}.`
+        : state.paused
+          ? `${state.targetName} pausou o controle.`
+          : null;
 
   return (
     <div
@@ -36,7 +38,12 @@ export function ControlToolbar({
     >
       <div className="flex max-w-full items-center gap-1 rounded-md bg-black/70 py-1 pr-1 pl-2.5 text-[0.75rem] text-white backdrop-blur-sm">
         <MousePointer2 size={13} strokeWidth={2} aria-hidden className="shrink-0 text-[#7dd3a8]" />
-        <span className="truncate font-medium">Controlando a tela de {state.targetName}</span>
+        <span
+          className="truncate font-medium"
+          title="Com a tela focada, todo o teclado vai para o PC remoto (inclusive Windows, Alt+Tab e Ctrl+C/V). Clique fora da tela para voltar ao seu."
+        >
+          Controlando a tela de {state.targetName}
+        </span>
         <span aria-hidden className="mx-1 h-3 w-px bg-white/25" />
         <span className="shrink-0 font-mono text-white/75 [font-variant-numeric:tabular-nums]" title="Ida e volta da rede, medida">
           {state.rttMs === null ? "--" : `${state.rttMs} ms`}

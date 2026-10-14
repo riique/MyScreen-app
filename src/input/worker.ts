@@ -19,18 +19,26 @@ type Native = {
     text(s: string): void;
     releaseAll(): void;
     foreground(): { pid: number; elevated: boolean | null };
+    windowPidAt(px: number, py: number): number;
     selfElevated(): boolean;
   };
+  startKeyboardHook(ownPid: number, onKey: (packed: number) => void): void;
+  stopKeyboardHook(): void;
 };
 
 type Command =
-  | { type: "probe"; nativePath: string; dryRun: boolean }
+  | { type: "probe"; nativePath: string; dryRun: boolean; ownPid: number }
   | { type: "inject"; cmd: InjectCommand }
-  | { type: "watch"; on: boolean };
+  | { type: "watch"; on: boolean }
+  | { type: "hook"; on: boolean };
 
 const parent = process.parentPort;
 
+let native: Native | null = null;
 let injector: InstanceType<Native["InputInjector"]> | null = null;
+/** PID do processo principal do MyScreen: dono de todas as janelas do app. */
+let ownPid = 0;
+let hookOn = false;
 let dryRun = false;
 let loadError: string | null = null;
 let selfElevated = false;
@@ -41,7 +49,7 @@ function load(path: string): void {
   if (injector || loadError || dryRun) return;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const native = require(path) as Native;
+    native = require(path) as Native;
     injector = new native.InputInjector();
     selfElevated = injector.selfElevated();
   } catch (error) {
@@ -55,6 +63,14 @@ function run(cmd: InjectCommand): void {
     return;
   }
   if (!injector) return;
+  // Zona protegida exata: clique ou roda sobre uma janela do MyScreen que
+  // está DE FATO sob o cursor (não só atrás de outra) não entra.
+  if ((cmd.t === "button" && cmd.down) || cmd.t === "wheel") {
+    if (ownPid && injector.windowPidAt(cmd.px, cmd.py) === ownPid) {
+      parent.postMessage({ type: "blocked" });
+      return;
+    }
+  }
   try {
     switch (cmd.t) {
       case "move":
@@ -96,11 +112,37 @@ function checkForeground(): void {
   }
 }
 
+/**
+ * Lado de quem controla: com a tela remota focada, o hook de baixo nível
+ * engole toda tecla física (Windows, Alt+Tab, Ctrl+C...) e manda ao renderer,
+ * que repassa ao PC controlado. Só engole com o MyScreen em primeiro plano.
+ */
+function setHook(on: boolean): void {
+  if (on === hookOn) return;
+  if (!native || dryRun) {
+    if (on) parent.postMessage({ type: "hook-error", message: loadError ?? "módulo nativo indisponível" });
+    return;
+  }
+  try {
+    if (on) {
+      native.startKeyboardHook(ownPid, (packed) => {
+        parent.postMessage({ type: "hookKey", scancode: packed & 0xffff, down: (packed >> 16) === 1 });
+      });
+    } else {
+      native.stopKeyboardHook();
+    }
+    hookOn = on;
+  } catch (error) {
+    parent.postMessage({ type: "hook-error", message: error instanceof Error ? error.message : String(error) });
+  }
+}
+
 parent.on("message", (event) => {
   const cmd = event.data as Command;
   switch (cmd.type) {
     case "probe":
       dryRun = cmd.dryRun;
+      ownPid = cmd.ownPid;
       load(cmd.nativePath);
       parent.postMessage({ type: "probe", ok: dryRun || injector !== null, error: loadError });
       break;
@@ -112,6 +154,9 @@ parent.on("message", (event) => {
       watchTimer = null;
       lastElevated = false;
       if (cmd.on && !dryRun) watchTimer = setInterval(checkForeground, 500);
+      break;
+    case "hook":
+      setHook(cmd.on);
       break;
   }
 });

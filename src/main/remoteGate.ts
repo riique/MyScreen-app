@@ -1,4 +1,4 @@
-import { contains, toPhysical, type Rect } from "../shared/remote/geometry";
+import { toPhysical, type Rect } from "../shared/remote/geometry";
 import {
   CONSENT_TIMEOUT_MS,
   REQUEST_COOLDOWN_MS,
@@ -59,9 +59,11 @@ export interface GateDeps {
   share(): HostShare | null;
   /** O injetor nativo carregou e a pessoa não desligou o recurso. */
   acceptsRequests(): { ok: true } | { ok: false; reason: "disabled" };
-  /** Retângulos físicos das janelas do MyScreen: clique ali é descartado. */
-  protectedRects(): Rect[];
-  /** Uma janela do MyScreen está em primeiro plano: tecla é descartada. */
+  /**
+   * Uma janela do MyScreen está em primeiro plano: tecla é descartada. (O
+   * clique sobre uma janela do MyScreen é descartado no utility "input", que
+   * pergunta ao Windows qual janela está DE FATO sob o pixel.)
+   */
   appFocused(): boolean;
   send(to: string, msg: Ctl): void;
   inject(cmd: InjectCommand): void;
@@ -87,6 +89,7 @@ type Session = {
   display: Rect;
   paused: boolean;
   elevated: boolean;
+  appFocused: boolean;
   lastSeq: number | null;
   pressedKeys: Set<number>;
   pressedButtons: Set<number>;
@@ -196,6 +199,7 @@ export class RemoteGate {
       display: share.physical,
       paused: false,
       elevated: false,
+      appFocused: this.deps.appFocused(),
       lastSeq: null,
       pressedKeys: new Set(),
       pressedButtons: new Set(),
@@ -210,6 +214,9 @@ export class RemoteGate {
       width: Math.round(share.physical.w),
       height: Math.round(share.physical.h),
     });
+    // Quem acabou de clicar em "Permitir" está com o MyScreen na frente: avisa
+    // o controlador que as teclas só chegam depois de um clique fora dele.
+    if (this.session.appFocused) this.sendState(this.session);
     this.deps.sessionChanged(this.active);
   }
 
@@ -264,7 +271,6 @@ export class RemoteGate {
       case "button": {
         const [px, py] = toPhysical(ev.x, ev.y, s.display);
         if (ev.down) {
-          if (this.inProtected(px, py)) return false;
           s.pressedButtons.add(ev.button);
         } else {
           // Soltar só o que foi apertado por nós: um "up" solto não faz sentido.
@@ -275,7 +281,6 @@ export class RemoteGate {
       }
       case "wheel": {
         const [px, py] = toPhysical(ev.x, ev.y, s.display);
-        if (this.inProtected(px, py)) return false;
         this.deps.inject({ t: "wheel", dx: ev.dx, dy: ev.dy, px, py });
         return true;
       }
@@ -296,10 +301,6 @@ export class RemoteGate {
         this.releaseAll(s);
         return true;
     }
-  }
-
-  private inProtected(px: number, py: number): boolean {
-    return this.deps.protectedRects().some((r) => contains(r, px, py));
   }
 
   private releaseAll(s: Session): void {
@@ -329,8 +330,22 @@ export class RemoteGate {
     this.deps.sessionChanged(this.active);
   }
 
+  /** Uma janela do MyScreen ganhou ou perdeu o primeiro plano. */
+  setAppFocused(focused: boolean): void {
+    const s = this.session;
+    if (!s || s.appFocused === focused) return;
+    s.appFocused = focused;
+    this.sendState(s);
+  }
+
   private sendState(s: Session): void {
-    const why: PauseWhy | undefined = s.paused ? "user" : s.elevated ? "elevated" : undefined;
+    const why: PauseWhy | undefined = s.paused
+      ? "user"
+      : s.elevated
+        ? "elevated"
+        : s.appFocused
+          ? "protected"
+          : undefined;
     const msg: Ctl = why
       ? { t: "state", sessionId: s.sessionId, paused: true, why }
       : { t: "state", sessionId: s.sessionId, paused: false };

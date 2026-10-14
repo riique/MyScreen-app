@@ -103,6 +103,38 @@ pub fn text_steps(s: &str) -> Vec<TextStep> {
     out
 }
 
+/// O que o hook de teclado faz com uma tecla física de quem controla.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum HookKey {
+    /// Vai para o PC remoto com este scancode do protocolo.
+    Forward(u16),
+    /// Engolida sem ir a lugar nenhum (shift falso do driver, Ctrl falso do AltGr).
+    Drop,
+}
+
+const LLKHF_EXTENDED: u32 = 0x01;
+
+/// `KBDLLHOOKSTRUCT` → scancode do protocolo. Corrige as esquisitices do
+/// hook de baixo nível: o Shift direito vem marcado como estendido; o AltGr
+/// manda um Ctrl esquerdo falso (scanCode 0x21D), que o Windows do outro lado
+/// gera sozinho; Print Screen e as setas com Num Lock vêm com Shift falso (E0 2A).
+pub fn hook_key(scan_code: u32, flags: u32) -> HookKey {
+    if scan_code & 0x200 != 0 {
+        return HookKey::Drop;
+    }
+    let sc = (scan_code & 0xFF) as u16;
+    if sc == 0 {
+        return HookKey::Drop;
+    }
+    let extended = flags & LLKHF_EXTENDED != 0;
+    match (sc, extended) {
+        (0x2A, true) => HookKey::Drop,
+        (0x36, true) => HookKey::Forward(0x36),
+        (_, true) => HookKey::Forward(sc | EXTENDED_BIT),
+        (_, false) => HookKey::Forward(sc),
+    }
+}
+
 /// O que está pressionado agora, para `release_all`.
 #[derive(Default)]
 pub struct Pressed {
@@ -150,9 +182,10 @@ pub mod sys {
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL,
         MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEINPUT,
     };
+    use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetSystemMetrics, GetWindowThreadProcessId, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-        SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+        GetAncestor, GetForegroundWindow, GetSystemMetrics, GetWindowThreadProcessId, WindowFromPoint, GA_ROOT,
+        SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
     };
 
     fn mouse(dx: i32, dy: i32, data: u32, flags: u32) -> INPUT {
@@ -251,6 +284,21 @@ pub mod sys {
         token_elevated(unsafe { GetCurrentProcess() }).unwrap_or(false)
     }
 
+    /// PID do dono da janela de topo que está DE FATO sob o pixel (px, py) —
+    /// não a que só ocupa o retângulo por trás de outras. 0 se não há janela.
+    pub fn window_pid_at(px: i32, py: i32) -> u32 {
+        unsafe {
+            let hwnd = WindowFromPoint(POINT { x: px, y: py });
+            if hwnd.is_null() {
+                return 0;
+            }
+            let root = GetAncestor(hwnd, GA_ROOT);
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(if root.is_null() { hwnd } else { root }, &mut pid);
+            pid
+        }
+    }
+
     /// PID da janela em primeiro plano e se o processo dela roda elevado
     /// (None quando o Windows não deixa saber).
     pub fn foreground() -> (u32, Option<bool>) {
@@ -275,9 +323,149 @@ pub mod sys {
     }
 }
 
+/// Hook de teclado de baixo nível (lado de quem controla). Ligado e com uma
+/// janela do próprio MyScreen em primeiro plano, toda tecla física —
+/// inclusive Windows, Alt+Tab e os atalhos globais — é engolida aqui e
+/// entregue ao `Sink`, para ir ao PC remoto. Fora disso, nada muda.
+#[cfg(windows)]
+pub mod hook {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::Mutex;
+    use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CallNextHookEx, GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, PostThreadMessageW,
+        SetWindowsHookExW, UnhookWindowsHookEx, HC_ACTION, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LLKHF_UP, MSG,
+        WH_KEYBOARD_LL, WM_QUIT,
+    };
+
+    pub type Sink = Box<dyn Fn(u16, bool) + Send + Sync>;
+
+    static OWN_PID: AtomicU32 = AtomicU32::new(0);
+    static ACTIVE: AtomicBool = AtomicBool::new(false);
+    static THREAD: AtomicU32 = AtomicU32::new(0);
+    static SINK: Mutex<Option<Sink>> = Mutex::new(None);
+    /// Teclas cuja descida foi engolida: só a subida delas é engolida também.
+    /// Uma tecla que já estava apertada antes do hook sobe normalmente aqui.
+    static SWALLOWED: Mutex<Option<HashSet<u16>>> = Mutex::new(None);
+
+    fn ours_in_front() -> bool {
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            if hwnd.is_null() {
+                return false;
+            }
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            pid != 0 && pid == OWN_PID.load(Ordering::Relaxed)
+        }
+    }
+
+    unsafe extern "system" fn proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        if code == HC_ACTION as i32 && ACTIVE.load(Ordering::Relaxed) {
+            let info = &*(lparam as *const KBDLLHOOKSTRUCT);
+            if info.flags & LLKHF_INJECTED == 0 {
+                let down = info.flags & LLKHF_UP == 0;
+                let key = hook_key(info.scanCode, info.flags);
+                let id = match key {
+                    HookKey::Forward(sc) => sc,
+                    HookKey::Drop => 0x1000 | (info.scanCode as u16 & 0xFFF),
+                };
+                let swallow = {
+                    let mut guard = SWALLOWED.lock().unwrap();
+                    let set = guard.get_or_insert_with(HashSet::new);
+                    if down {
+                        let yes = ours_in_front();
+                        if yes {
+                            set.insert(id);
+                        }
+                        yes
+                    } else {
+                        set.remove(&id)
+                    }
+                };
+                if swallow {
+                    if let HookKey::Forward(sc) = key {
+                        if let Some(sink) = SINK.lock().unwrap().as_ref() {
+                            sink(sc, down);
+                        }
+                    }
+                    return 1;
+                }
+            }
+        }
+        CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+    }
+
+    /// Liga o hook numa thread própria (com laço de mensagens). Idempotente.
+    pub fn start(own_pid: u32, sink: Sink) -> Result<(), String> {
+        OWN_PID.store(own_pid, Ordering::Relaxed);
+        *SINK.lock().unwrap() = Some(sink);
+        ACTIVE.store(true, Ordering::SeqCst);
+        if THREAD.load(Ordering::SeqCst) != 0 {
+            return Ok(());
+        }
+        let (tx, rx) = std::sync::mpsc::channel::<Result<u32, String>>();
+        std::thread::Builder::new()
+            .name("myscreen-keyhook".into())
+            .spawn(move || unsafe {
+                let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(proc), GetModuleHandleW(std::ptr::null()), 0);
+                if hook.is_null() {
+                    let _ = tx.send(Err("SetWindowsHookExW falhou".into()));
+                    return;
+                }
+                let _ = tx.send(Ok(GetCurrentThreadId()));
+                let mut msg: MSG = std::mem::zeroed();
+                while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {}
+                UnhookWindowsHookEx(hook);
+            })
+            .map_err(|e| e.to_string())?;
+        match rx.recv() {
+            Ok(Ok(id)) => {
+                THREAD.store(id, Ordering::SeqCst);
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                ACTIVE.store(false, Ordering::SeqCst);
+                Err(e)
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// Desliga e esquece o que estava engolido.
+    pub fn stop() {
+        ACTIVE.store(false, Ordering::SeqCst);
+        *SINK.lock().unwrap() = None;
+        *SWALLOWED.lock().unwrap() = None;
+        let id = THREAD.swap(0, Ordering::SeqCst);
+        if id != 0 {
+            unsafe {
+                PostThreadMessageW(id, WM_QUIT, 0, 0);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hook_corrige_as_esquisitices_do_windows() {
+        assert_eq!(hook_key(0x1E, 0), HookKey::Forward(0x1E));
+        // Seta para a esquerda e Windows: estendidas.
+        assert_eq!(hook_key(0x4B, 1), HookKey::Forward(0x14B));
+        assert_eq!(hook_key(0x5B, 1), HookKey::Forward(0x15B));
+        // Shift direito vem marcado como estendido, mas não é.
+        assert_eq!(hook_key(0x36, 1), HookKey::Forward(0x36));
+        // Ctrl falso do AltGr e Shift falso do driver: engolidos, não enviados.
+        assert_eq!(hook_key(0x21D, 0), HookKey::Drop);
+        assert_eq!(hook_key(0x2A, 1), HookKey::Drop);
+        assert_eq!(hook_key(0, 0), HookKey::Drop);
+    }
 
     #[test]
     fn normaliza_cantos_da_area_virtual() {

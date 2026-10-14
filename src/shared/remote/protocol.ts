@@ -27,7 +27,8 @@ export const REQUEST_COOLDOWN_MS = 30_000;
 
 export type DenyReason = "refused" | "timeout" | "busy" | "disabled" | "not-sharing" | "cooldown";
 export type RevokeReason = "user" | "share-ended" | "left" | "reconnected" | "locked" | "panic" | "error";
-export type PauseWhy = "local-input" | "locked" | "elevated" | "user";
+/** `protected`: o MyScreen da pessoa controlada está em primeiro plano e as teclas não entram. */
+export type PauseWhy = "local-input" | "locked" | "elevated" | "user" | "protected";
 
 export type Ctl =
   | { t: "request"; v: number; reqId: string }
@@ -41,7 +42,7 @@ export type Ctl =
 
 const DENY: readonly DenyReason[] = ["refused", "timeout", "busy", "disabled", "not-sharing", "cooldown"];
 const REVOKE: readonly RevokeReason[] = ["user", "share-ended", "left", "reconnected", "locked", "panic", "error"];
-const WHY: readonly PauseWhy[] = ["local-input", "locked", "elevated", "user"];
+const WHY: readonly PauseWhy[] = ["local-input", "locked", "elevated", "user", "protected"];
 
 /** 16 bytes aleatórios em base64url (22 caracteres). */
 const ID_RE = /^[A-Za-z0-9_-]{22}$/;

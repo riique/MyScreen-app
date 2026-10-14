@@ -307,9 +307,41 @@ impl InputInjector {
         ForegroundInfo { pid, elevated }
     }
 
+    /// PID do dono da janela visível sob o pixel (zona protegida exata).
+    #[napi]
+    pub fn window_pid_at(&self, px: i32, py: i32) -> u32 {
+        input::sys::window_pid_at(px, py)
+    }
+
     /// O próprio MyScreen roda como administrador? (Aí o UIPI não bloqueia.)
     #[napi]
     pub fn self_elevated(&self) -> bool {
         input::sys::self_elevated()
     }
+}
+
+type KeyFn = ThreadsafeFunction<u32, (), u32, Status, false, false, 256>;
+
+/// Liga o hook de teclado de quem controla. `onKey` recebe
+/// `scancode | (down << 16)` para cada tecla engolida. Só engole com uma
+/// janela do processo `ownPid` (o MyScreen) em primeiro plano.
+#[napi]
+pub fn start_keyboard_hook(own_pid: u32, on_key: Function<u32, ()>) -> Result<()> {
+    let tsfn: KeyFn = on_key
+        .build_threadsafe_function::<u32>()
+        .callee_handled::<false>()
+        .max_queue_size::<256>()
+        .build()?;
+    input::hook::start(
+        own_pid,
+        Box::new(move |sc, down| {
+            let _ = tsfn.call(sc as u32 | if down { 1 << 16 } else { 0 }, ThreadsafeFunctionCallMode::NonBlocking);
+        }),
+    )
+    .map_err(Error::from_reason)
+}
+
+#[napi]
+pub fn stop_keyboard_hook() {
+    input::hook::stop();
 }

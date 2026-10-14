@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { RemoteGate, type GateDeps, type HostShare, type InjectCommand } from "../src/main/remoteGate";
 import type { Rect } from "@shared/remote/geometry";
+
 import { encodeInput, sessionTag, type Ctl, type InputEvent } from "@shared/remote/protocol";
 
 const REQ = "AAECAwQFBgcICQoLDA0ODw";
@@ -19,7 +20,6 @@ function setup() {
   const world = {
     share: { kind: "screen", sourceName: "Monitor 1", trackSid: "TR_screen", physical: display } as HostShare | null,
     disabled: false,
-    protected: [] as Rect[],
     appFocused: false,
   };
   const deps: GateDeps = {
@@ -32,7 +32,6 @@ function setup() {
     randomId: () => SESSION,
     share: () => world.share,
     acceptsRequests: () => (world.disabled ? { ok: false, reason: "disabled" } : { ok: true }),
-    protectedRects: () => world.protected,
     appFocused: () => world.appFocused,
     send: (to, msg) => sent.push({ to, msg }),
     inject: (cmd) => {
@@ -68,6 +67,13 @@ beforeEach(() => {
 });
 
 describe("consentimento", () => {
+  it("quem permitiu com o MyScreen na frente recebe o aviso junto com o grant", () => {
+    const u = setup();
+    u.world.appFocused = true;
+    u.grant();
+    expect(u.sent.map((m) => m.msg.t)).toEqual(["grant", "state"]);
+    expect(u.sent.at(-1)?.msg).toMatchObject({ why: "protected" });
+  });
   it("pedido abre o diálogo; sem clique não há sessão", () => {
     t.gate.handleCtl(ana, { t: "request", v: 1, reqId: REQ });
     expect(t.consents).toEqual([REQ]);
@@ -132,18 +138,22 @@ describe("portão de input", () => {
     expect(t.input({ t: "move", x: 4, y: 4 }, ana, 9)).toBe(false);
     expect(t.input({ t: "move", x: 6, y: 6 }, ana, 11)).toBe(true);
   });
-  it("zona protegida: descarta clique e roda, deixa movimento passar", () => {
-    t.world.protected = [{ x: -1920, y: 0, w: 500, h: 500 }];
-    expect(t.input({ t: "move", x: 0, y: 0 })).toBe(true);
-    expect(t.input({ t: "button", button: 0, down: true, x: 0, y: 0 })).toBe(false);
-    expect(t.input({ t: "wheel", dx: 0, dy: 120, x: 0, y: 0 })).toBe(false);
+  it("clique e roda chegam ao utility (a zona protegida exata é checada lá)", () => {
+    expect(t.input({ t: "button", button: 0, down: true, x: 0, y: 0 })).toBe(true);
+    expect(t.input({ t: "wheel", dx: 0, dy: 120, x: 0, y: 0 })).toBe(true);
+    expect(t.injected.at(-1)).toEqual({ t: "wheel", dx: 0, dy: 120, px: -1920, py: 0 });
   });
-  it("arrastar para dentro da zona protegida ainda solta o botão", () => {
+  it("soltar só o botão que foi apertado por nós", () => {
     expect(t.input({ t: "button", button: 0, down: true, x: 65535, y: 65535 })).toBe(true);
-    t.world.protected = [{ x: -1920, y: 0, w: 500, h: 500 }];
     expect(t.input({ t: "button", button: 0, down: false, x: 0, y: 0 })).toBe(true);
-    // "up" sem "down" nosso não sai.
     expect(t.input({ t: "button", button: 2, down: false, x: 65535, y: 65535 })).toBe(false);
+  });
+  it("MyScreen em primeiro plano: avisa o controlador e volta a avisar quando sai", () => {
+    t.gate.setAppFocused(true);
+    expect(t.sent.at(-1)?.msg).toEqual({ t: "state", sessionId: SESSION, paused: true, why: "protected" });
+    expect(t.input({ t: "move", x: 1, y: 1 })).toBe(true);
+    t.gate.setAppFocused(false);
+    expect(t.sent.at(-1)?.msg).toEqual({ t: "state", sessionId: SESSION, paused: false });
   });
   it("teclas não entram com o MyScreen em primeiro plano", () => {
     t.world.appFocused = true;

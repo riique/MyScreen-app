@@ -22,6 +22,9 @@ export function ControlOverlay({ send, label }: { send: (ev: InputEvent) => void
     const out = (ev: InputEvent) => sendRef.current(ev);
     const buttons = new Set<number>();
     const keys = new Set<string>();
+    /** Teclas vindas do hook (scancode): Windows, Alt+Tab, Ctrl+C... */
+    const hookKeys = new Set<number>();
+    const remote = window.myscreen.remote;
     const wheel = new WheelAccumulator();
     let pendingMove: [number, number] | null = null;
     let raf = 0;
@@ -100,10 +103,28 @@ export function ControlOverlay({ send, label }: { send: (ev: InputEvent) => void
 
     // Perdeu o foco ou o ponteiro: nada pode ficar apertado do outro lado.
     const releaseAll = () => {
-      if (buttons.size === 0 && keys.size === 0) return;
+      if (buttons.size === 0 && keys.size === 0 && hookKeys.size === 0) return;
       buttons.clear();
       keys.clear();
+      hookKeys.clear();
       out({ t: "release" });
+    };
+
+    // Focada, a tela remota pega o teclado inteiro: o hook de baixo nível engole
+    // as teclas antes do Windows e dos atalhos deste PC. Sem hook (módulo
+    // indisponível), sobra o teclado do navegador (sem tecla Windows/Alt+Tab).
+    const offHookKey = remote.onHookKey((scancode, down) => {
+      if (down) {
+        hookKeys.add(scancode);
+      } else if (!hookKeys.delete(scancode)) {
+        return;
+      }
+      out({ t: "key", scancode, down });
+    });
+    const onFocusIn = () => remote.captureKeys(true);
+    const onFocusOut = () => {
+      remote.captureKeys(false);
+      releaseAll();
     };
     // Captura perdida com botão apertado (janela trocou, alerta do sistema): solta.
     const onLostCapture = () => {
@@ -139,7 +160,8 @@ export function ControlOverlay({ send, label }: { send: (ev: InputEvent) => void
     el.addEventListener("wheel", onWheel, { passive: false });
     el.addEventListener("keydown", onKey);
     el.addEventListener("keyup", onKey);
-    el.addEventListener("blur", releaseAll);
+    el.addEventListener("focus", onFocusIn);
+    el.addEventListener("blur", onFocusOut);
     el.addEventListener("contextmenu", stop);
     el.addEventListener("dblclick", stop);
     el.addEventListener("auxclick", stop);
@@ -161,7 +183,10 @@ export function ControlOverlay({ send, label }: { send: (ev: InputEvent) => void
       el.removeEventListener("wheel", onWheel);
       el.removeEventListener("keydown", onKey);
       el.removeEventListener("keyup", onKey);
-      el.removeEventListener("blur", releaseAll);
+      el.removeEventListener("focus", onFocusIn);
+      el.removeEventListener("blur", onFocusOut);
+      offHookKey();
+      remote.captureKeys(false);
       el.removeEventListener("contextmenu", stop);
       el.removeEventListener("dblclick", stop);
       el.removeEventListener("auxclick", stop);

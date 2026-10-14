@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import {
+  app,
   BrowserWindow,
   globalShortcut,
   ipcMain,
@@ -33,6 +34,9 @@ type WorkerMessage =
   | { type: "probe"; ok: boolean; error: string | null }
   | { type: "elevated"; on: boolean }
   | { type: "error"; message: string }
+  | { type: "blocked" }
+  | { type: "hookKey"; scancode: number; down: boolean }
+  | { type: "hook-error"; message: string }
   | { type: "dryrun"; cmd: InjectCommand };
 
 let child: UtilityProcess | null = null;
@@ -71,6 +75,16 @@ function ensureChild(): UtilityProcess {
       case "dryrun":
         console.info("[input dry-run]", JSON.stringify(msg.cmd));
         break;
+      case "blocked":
+        // Clique sobre o MyScreen da pessoa controlada: descartado de propósito.
+        break;
+      case "hookKey":
+        if (hookOwner && !hookOwner.isDestroyed()) hookOwner.send("remote:hookKey", msg.scancode, msg.down);
+        break;
+      case "hook-error":
+        console.warn("Hook de teclado indisponível:", msg.message);
+        if (hookOwner && !hookOwner.isDestroyed()) hookOwner.send("remote:hookState", false);
+        break;
     }
   });
   proc.on("exit", (code) => {
@@ -102,7 +116,7 @@ export function remoteCapabilities(): Promise<RemoteCapabilities> {
         resolve(msg);
       };
     });
-    proc.postMessage({ type: "probe", nativePath: file, dryRun: DRY_RUN });
+    proc.postMessage({ type: "probe", nativePath: file, dryRun: DRY_RUN, ownPid: process.pid });
     const msg = await reply;
     if (!msg) return { available: false, reason: "O processo de controle remoto não respondeu." };
     return msg.ok
@@ -135,16 +149,6 @@ function currentShare(): HostShare | null {
   };
 }
 
-function protectedRects(): Rect[] {
-  const out: Rect[] = [];
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed() || !win.isVisible() || win.isMinimized()) continue;
-    const r = screen.dipToScreenRect(win, win.getBounds());
-    out.push({ x: r.x, y: r.y, w: r.width, h: r.height });
-  }
-  return out;
-}
-
 function consentNotification(name: string): void {
   const win = getMainWindow();
   win?.flashFrame(true);
@@ -166,7 +170,6 @@ const gate: RemoteGate = new RemoteGate({
   randomId,
   share: currentShare,
   acceptsRequests: () => (available && !getSettings().remoteControlDisabled ? { ok: true } : { ok: false, reason: "disabled" }),
-  protectedRects,
   appFocused: () => BrowserWindow.getFocusedWindow() !== null,
   send: (to: string, msg: Ctl) => sendToMain("remote:send", to, msg),
   inject: (cmd) => child?.postMessage({ type: "inject", cmd }),
@@ -290,10 +293,42 @@ export function registerRemote(): void {
   on("remote:stop", () => gate.end("user"));
   on("remote:pause", (_e, paused) => gate.setPaused(asBoolean(paused, "paused")));
 
+  // Hook de teclado de quem controla: ligado enquanto a tela remota está focada.
+  on("remote:captureKeys", (event, on) => void captureKeys(event.sender, asBoolean(on, "on")));
+
+  // O MyScreen ganhou/perdeu o primeiro plano: as teclas do controlador param/voltam.
+  const syncFocus = () => setImmediate(() => gate.setAppFocused(BrowserWindow.getFocusedWindow() !== null));
+  app.on("browser-window-focus", syncFocus);
+  app.on("browser-window-blur", syncFocus);
+
   onSharingChanged(() => gate.shareChanged());
   screen.on("display-removed", () => gate.shareChanged());
   powerMonitor.on("lock-screen", () => gate.end("locked"));
   powerMonitor.on("suspend", () => gate.end("locked"));
+}
+
+let hookOwner: Electron.WebContents | null = null;
+
+async function captureKeys(sender: Electron.WebContents, on: boolean): Promise<void> {
+  if (on) {
+    const caps = await remoteCapabilities();
+    if (!caps.available || !child) {
+      sender.send("remote:hookState", false);
+      return;
+    }
+    hookOwner = sender;
+    sender.once("destroyed", () => {
+      if (hookOwner === sender) {
+        hookOwner = null;
+        child?.postMessage({ type: "hook", on: false });
+      }
+    });
+  } else if (hookOwner !== sender) {
+    return;
+  }
+  child?.postMessage({ type: "hook", on });
+  sender.send("remote:hookState", on);
+  if (!on) hookOwner = null;
 }
 
 /** A janela principal recarregou ou caiu: quem mandava o input sumiu. */

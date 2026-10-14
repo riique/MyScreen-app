@@ -210,6 +210,12 @@ export interface DesktopBridge {
     roomLost(): void;
     stop(): void;
     pause(paused: boolean): void;
+    /** Lado de quem controla: liga/desliga o hook que manda TODA tecla ao PC remoto. */
+    captureKeys(on: boolean): void;
+    /** Tecla física engolida pelo hook (scancode do protocolo). */
+    onHookKey(cb: (scancode: number, down: boolean) => void): () => void;
+    /** O hook ligou (true) ou não está disponível/desligou (false). */
+    onHookState(cb: (on: boolean) => void): () => void;
     /** O processo principal pede para mandar um `rc.ctl` a alguém. */
     onSend(cb: (to: string, msg: unknown) => void): () => void;
     onConsent(cb: (req: RemoteConsentRequest) => void): () => void;
