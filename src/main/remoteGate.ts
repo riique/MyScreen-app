@@ -1,6 +1,9 @@
 import { toPhysical, type Rect } from "../shared/remote/geometry";
 import {
+  CLIP_FIRST,
+  CLIP_LAST,
   CONSENT_TIMEOUT_MS,
+  MAX_CLIP_BYTES,
   REQUEST_COOLDOWN_MS,
   RC_VERSION,
   decodeInput,
@@ -67,6 +70,8 @@ export interface GateDeps {
   appFocused(): boolean;
   send(to: string, msg: Ctl): void;
   inject(cmd: InjectCommand): void;
+  /** Põe na área de transferência deste PC o texto copiado em quem controla. */
+  setClipboard(text: string): void;
   askConsent(req: ConsentRequest): void;
   closeConsent(reqId: string): void;
   sessionChanged(info: SessionInfo | null, ended?: { reason: RevokeReason; identity: string; name: string }): void;
@@ -97,6 +102,8 @@ type Session = {
   refilledAt: number;
   /** Último aviso de clique bloqueado (no máximo um a cada BLOCKED_NOTICE_MS). */
   blockedNoticeAt: number;
+  /** Área de transferência chegando em pedaços (null: nenhuma em andamento). */
+  clip: { parts: Uint8Array[]; size: number } | null;
 };
 
 const BLOCKED_NOTICE_MS = 1500;
@@ -210,6 +217,7 @@ export class RemoteGate {
       tokens: BUCKET_BURST,
       refilledAt: this.deps.now(),
       blockedNoticeAt: -Infinity,
+      clip: null,
     };
     send({
       t: "grant",
@@ -260,7 +268,10 @@ export class RemoteGate {
         return false;
       }
       // Soltar é sempre permitido (nada pode ficar preso); o resto respeita a pausa.
-      if (s.paused && !isRelease(ev)) return false;
+      if (s.paused && !isRelease(ev)) {
+        s.clip = null;
+        return false;
+      }
     }
     s.lastSeq = seq;
     return this.apply(s, ev);
@@ -302,10 +313,45 @@ export class RemoteGate {
         if (this.deps.appFocused()) return false;
         this.deps.inject({ t: "text", text: ev.text });
         return true;
+      case "clip":
+        return this.clipChunk(s, ev.flags, ev.bytes);
       case "release":
         this.releaseAll(s);
         return true;
     }
+  }
+
+  /**
+   * Junta os pedaços na ordem (o canal confiável é ordenado). Um pedaço fora
+   * de sequência ou que estoura o teto descarta a área de transferência toda:
+   * meio texto colado é pior que nada.
+   */
+  private clipChunk(s: Session, flags: number, bytes: Uint8Array): boolean {
+    if (flags & CLIP_FIRST) s.clip = { parts: [], size: 0 };
+    const clip = s.clip;
+    if (!clip) return false;
+    clip.size += bytes.byteLength;
+    if (clip.size > MAX_CLIP_BYTES) {
+      s.clip = null;
+      return false;
+    }
+    clip.parts.push(bytes);
+    if (!(flags & CLIP_LAST)) return true;
+    s.clip = null;
+    const all = new Uint8Array(clip.size);
+    let at = 0;
+    for (const part of clip.parts) {
+      all.set(part, at);
+      at += part.byteLength;
+    }
+    let text: string;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(all);
+    } catch {
+      return false;
+    }
+    this.deps.setClipboard(text);
+    return true;
   }
 
   private releaseAll(s: Session): void {

@@ -214,6 +214,7 @@ contador único para todos os tipos (com wrap).
 | `0x04 KEY` | `u16 scancode (bit 0x100 = estendida), u8 down` | confiável |
 | `0x05 TEXT` | UTF-8, até 1 KiB | confiável |
 | `0x06 RELEASE_ALL` | — | confiável |
+| `0x07 CLIP` | `u8 flags (1 primeiro, 2 último)`, pedaço UTF-8 de 1 a 1024 bytes; total até 128 KiB | confiável |
 
 `x`, `y` em `0..65535` relativos **ao quadro de vídeo** (não ao elemento HTML, não à tela do
 controlador).
@@ -620,8 +621,11 @@ Saída: notas com o que foi medido, ajustes neste documento.
 
 - Controle de **janela** compartilhada: mapear para `DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS)`
   do HWND, acompanhar movimento/redimensionamento, descartar cliques fora dela.
-- Área de transferência de texto, **sob comando explícito** ("Copiar do remoto" / "Colar no
-  remoto"), nunca sincronizada sozinha.
+- Área de transferência de texto, de quem controla para o controlado: **feito**. Ao focar a tela
+  remota, o texto copiado no PC de quem controla vai em `CLIP` (só se mudou desde o último envio),
+  e os demais eventos esperam ele sair, para um Ctrl+V logo depois colar o texto novo. O portão
+  junta os pedaços e chama `clipboard.writeText` no main antes da tecla seguinte; pausado, descarta.
+  Falta o sentido contrário ("Copiar do remoto").
 - Pedir "trocar para o monitor 2" (o controlado confirma; troca de fonte = sessão nova).
 
 ### Fase 4 — Nível AnyDesk (decisão separada, muda o produto)

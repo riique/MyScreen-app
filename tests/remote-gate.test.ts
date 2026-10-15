@@ -2,7 +2,15 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { RemoteGate, type GateDeps, type HostShare, type InjectCommand } from "../src/main/remoteGate";
 import type { Rect } from "@shared/remote/geometry";
 
-import { encodeInput, sessionTag, type Ctl, type InputEvent } from "@shared/remote/protocol";
+import {
+  CLIP_FIRST,
+  CLIP_LAST,
+  clipChunks,
+  encodeInput,
+  sessionTag,
+  type Ctl,
+  type InputEvent,
+} from "@shared/remote/protocol";
 
 const REQ = "AAECAwQFBgcICQoLDA0ODw";
 const SESSION = "EBESExQVFhcYGRobHB0eHw";
@@ -17,6 +25,7 @@ function setup() {
   const injected: InjectCommand[] = [];
   const log: string[] = [];
   const consents: string[] = [];
+  const clipboard: string[] = [];
   const world = {
     share: { kind: "screen", sourceName: "Monitor 1", trackSid: "TR_screen", physical: display } as HostShare | null,
     disabled: false,
@@ -38,6 +47,10 @@ function setup() {
       injected.push(cmd);
       log.push(`inject:${cmd.t}`);
     },
+    setClipboard: (text) => {
+      clipboard.push(text);
+      log.push("clipboard");
+    },
     askConsent: (req) => consents.push(req.reqId),
     closeConsent: () => {},
     sessionChanged: (info) => log.push(info ? "session:on" : "session:off"),
@@ -58,7 +71,7 @@ function setup() {
     gate.handleCtl(ana, { t: "request", v: 1, reqId: REQ });
     gate.decide(REQ, true);
   };
-  return { gate, sent, injected, log, consents, world, advance, input, grant, setSeq: (v: number) => (seq = v) };
+  return { gate, sent, injected, log, clipboard, consents, world, advance, input, grant, setSeq: (v: number) => (seq = v) };
 }
 
 let t: ReturnType<typeof setup>;
@@ -232,5 +245,48 @@ describe("revogação", () => {
     const n = t.sent.length;
     t.gate.handleCtl({ ...ana, sid: "PA_x" }, { t: "ping", sessionId: SESSION, n: 4 });
     expect(t.sent.length).toBe(n);
+  });
+});
+
+describe("área de transferência", () => {
+  const clip = (text: string) => clipChunks(text)!;
+  beforeEach(() => t.grant());
+
+  it("junta os pedaços e põe o texto inteiro, antes do Ctrl+V que vem depois", () => {
+    const text = "linha 1\r\nolá 😀 ".repeat(200);
+    for (const c of clip(text)) expect(t.input(c)).toBe(true);
+    t.input({ t: "key", scancode: 0x1d, down: true });
+    t.input({ t: "key", scancode: 0x2f, down: true });
+    expect(t.clipboard).toEqual([text]);
+    expect(t.log.slice(-3)).toEqual(["clipboard", "inject:key", "inject:key"]);
+  });
+  it("pedaço sem o primeiro, ou UTF-8 inválido, não muda nada", () => {
+    expect(t.input({ t: "clip", flags: CLIP_LAST, bytes: new Uint8Array([0x61]) })).toBe(false);
+    expect(t.input({ t: "clip", flags: CLIP_FIRST | CLIP_LAST, bytes: new Uint8Array([0xc3, 0x28]) })).toBe(false);
+    expect(t.clipboard).toEqual([]);
+  });
+  it("um novo primeiro pedaço descarta o que estava pela metade", () => {
+    const [first] = clip("a".repeat(3000));
+    t.input(first);
+    for (const c of clip("novo")) t.input(c);
+    expect(t.clipboard).toEqual(["novo"]);
+  });
+  it("pausado não entra, e o que estava chegando é descartado", () => {
+    const [first, ...rest] = clip("b".repeat(3000));
+    t.input(first);
+    t.gate.setPaused(true);
+    expect(t.input(rest[0])).toBe(false);
+    t.gate.setPaused(false);
+    for (const c of rest) t.input(c);
+    expect(t.clipboard).toEqual([]);
+  });
+  it("128 KiB de uma vez não estoura o balde", () => {
+    for (const c of clip("c".repeat(128 * 1024))) t.input(c);
+    expect(t.gate.active).not.toBeNull();
+    expect(t.clipboard).toHaveLength(1);
+  });
+  it("só de quem controla", () => {
+    for (const c of clip("x")) t.input(c, { identity: "Bia-00000000", sid: "PA_b", name: "Bia" });
+    expect(t.clipboard).toEqual([]);
   });
 });

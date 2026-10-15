@@ -32,13 +32,17 @@ export function ControlToolbar({
             ? `Esse ponto é uma janela do MyScreen de ${state.targetName}, mesmo que não apareça na transmissão. Ela não aceita seus cliques.`
             : null;
 
+  const faded = hidden && !textOpen;
+
   return (
     <div
-      className={`absolute inset-x-2 top-2 z-10 flex flex-col items-center gap-1.5 transition-opacity duration-300 ${hidden && !textOpen ? "pointer-events-none opacity-0" : ""}`}
+      // A faixa ocupa a largura do quadro: só a barra e o formulário pegam o
+      // mouse, o resto deixa passar para a tela controlada.
+      className={`pointer-events-none absolute inset-x-2 top-2 z-10 flex flex-col items-center gap-1.5 transition-opacity duration-300 ${faded ? "opacity-0" : ""}`}
       onDoubleClick={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.stopPropagation()}
     >
-      <div className="flex max-w-full items-center gap-1 rounded-md bg-black/70 py-1 pr-1 pl-2.5 text-[0.75rem] text-white backdrop-blur-sm">
+      <div className={`${faded ? "" : "pointer-events-auto"} flex max-w-full items-center gap-1 rounded-md bg-black/70 py-1 pr-1 pl-2.5 text-[0.75rem] text-white backdrop-blur-sm`}>
         <MousePointer2 size={13} strokeWidth={2} aria-hidden className="shrink-0 text-[#7dd3a8]" />
         <span
           className="truncate font-medium"
@@ -141,7 +145,7 @@ function SendText({ send, onClose }: { send: (ev: InputEvent) => void; onClose: 
         if (e.key === "Escape") onClose();
         e.stopPropagation();
       }}
-      className="flex w-[min(28rem,100%)] flex-col gap-2 rounded-md bg-black/80 p-2.5 text-white backdrop-blur-sm"
+      className="pointer-events-auto flex w-[min(28rem,100%)] flex-col gap-2 rounded-md bg-black/80 p-2.5 text-white backdrop-blur-sm"
     >
       <label htmlFor="rc-send-text" className="text-[0.75rem] text-white/80">
         Texto para digitar no PC remoto (onde estiver o cursor de lá)

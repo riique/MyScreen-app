@@ -201,6 +201,8 @@ export interface DesktopBridge {
     elevate(): Promise<boolean>;
     /** Lado de quem controla: liga/desliga o hook que manda TODA tecla ao PC remoto. */
     captureKeys(on: boolean): void;
+    /** Lado de quem controla: o texto da área de transferência deste PC. */
+    readClipboard(): Promise<string>;
     /** Tecla física engolida pelo hook (scancode do protocolo). */
     onHookKey(cb: (scancode: number, down: boolean) => void): () => void;
     /** O hook ligou (true) ou não está disponível/desligou (false). */

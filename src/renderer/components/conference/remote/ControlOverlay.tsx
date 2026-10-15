@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { contentRect, toNormalized } from "@shared/remote/geometry";
 import { scancodeFor } from "@shared/remote/keymap";
-import { WheelAccumulator, type InputEvent } from "@shared/remote/protocol";
+import { WheelAccumulator, clipChunks, type InputEvent } from "@shared/remote/protocol";
 
 /**
  * Camada transparente sobre o vídeo da tela controlada. Mouse sempre; teclado
@@ -10,6 +10,11 @@ import { WheelAccumulator, type InputEvent } from "@shared/remote/protocol";
  *
  * Coordenadas relativas ao QUADRO DE VÍDEO, recalculadas a cada evento (a
  * resolução pode mudar no meio). Clique na tarja preta não sai.
+ *
+ * Área de transferência: ao focar a tela remota (voltando de copiar algo
+ * aqui), o texto copiado vai para o PC controlado, se mudou desde o último
+ * envio. Até ele sair, os eventos esperam: um Ctrl+V logo em seguida cola o
+ * texto novo, não o antigo.
  */
 export function ControlOverlay({ send, label }: { send: (ev: InputEvent) => void; label: string }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -19,7 +24,15 @@ export function ControlOverlay({ send, label }: { send: (ev: InputEvent) => void
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const out = (ev: InputEvent) => sendRef.current(ev);
+    let syncing = false;
+    let held: InputEvent[] = [];
+    const out = (ev: InputEvent) => {
+      if (syncing) held.push(ev);
+      else sendRef.current(ev);
+    };
+    /** Último texto mandado: não reenvia nem pisa no que foi copiado lá. */
+    let lastClip: string | null = null;
+    let disposed = false;
     const buttons = new Set<number>();
     const keys = new Set<string>();
     /** Teclas vindas do hook (scancode): Windows, Alt+Tab, Ctrl+C... */
@@ -121,7 +134,35 @@ export function ControlOverlay({ send, label }: { send: (ev: InputEvent) => void
       }
       out({ t: "key", scancode, down });
     });
-    const onFocusIn = () => remote.captureKeys(true);
+    const syncClipboard = async () => {
+      if (syncing) return;
+      syncing = true;
+      try {
+        const text = await Promise.race([
+          remote.readClipboard(),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 500)),
+        ]);
+        if (!disposed && text && text !== lastClip) {
+          const chunks = clipChunks(text);
+          if (chunks) {
+            for (const chunk of chunks) sendRef.current(chunk);
+            lastClip = text;
+          }
+        }
+      } catch (error) {
+        console.warn("Área de transferência indisponível:", error);
+      } finally {
+        syncing = false;
+        const queued = held;
+        held = [];
+        if (!disposed) for (const ev of queued) sendRef.current(ev);
+      }
+    };
+
+    const onFocusIn = () => {
+      remote.captureKeys(true);
+      void syncClipboard();
+    };
     const onFocusOut = () => {
       remote.captureKeys(false);
       releaseAll();
@@ -173,7 +214,11 @@ export function ControlOverlay({ send, label }: { send: (ev: InputEvent) => void
 
     return () => {
       if (raf) cancelAnimationFrame(raf);
+      // Antes do disposed: o "release" não pode ficar preso na fila.
+      syncing = false;
+      held = [];
       releaseAll();
+      disposed = true;
       keyboard?.unlock?.();
       el.removeEventListener("pointermove", onMove);
       el.removeEventListener("pointerdown", onDown);
