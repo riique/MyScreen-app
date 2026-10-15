@@ -140,12 +140,18 @@ export const IN = {
   KEY: 0x04,
   TEXT: 0x05,
   RELEASE_ALL: 0x06,
+  CLIP: 0x07,
 } as const;
 
 /** `u8 tipo | u32 sessionTag | u16 seq` */
 export const HEADER_BYTES = 7;
 export const MAX_TEXT_BYTES = 1024;
 export const COORD_MAX = 65535;
+/** Teto da área de transferência inteira (UTF-8), somados os pedaços. */
+export const MAX_CLIP_BYTES = 128 * 1024;
+/** Flags do pedaço de área de transferência. */
+export const CLIP_FIRST = 0x01;
+export const CLIP_LAST = 0x02;
 
 export type InputEvent =
   | { t: "move"; x: number; y: number }
@@ -153,7 +159,25 @@ export type InputEvent =
   | { t: "wheel"; dx: number; dy: number; x: number; y: number }
   | { t: "key"; scancode: number; down: boolean }
   | { t: "text"; text: string }
+  /**
+   * Pedaço do texto copiado em quem controla, para colar do outro lado. Vai
+   * em pedaços de até 1 KiB; o PC controlado junta e decodifica no último.
+   */
+  | { t: "clip"; flags: number; bytes: Uint8Array }
   | { t: "release" };
+
+/** Texto → pedaços `clip`, ou null se passa de `MAX_CLIP_BYTES` (ou é vazio). */
+export function clipChunks(text: string): Extract<InputEvent, { t: "clip" }>[] | null {
+  const all = new TextEncoder().encode(text);
+  if (all.byteLength === 0 || all.byteLength > MAX_CLIP_BYTES) return null;
+  const out: Extract<InputEvent, { t: "clip" }>[] = [];
+  for (let at = 0; at < all.byteLength; at += MAX_TEXT_BYTES) {
+    const end = Math.min(all.byteLength, at + MAX_TEXT_BYTES);
+    const flags = (at === 0 ? CLIP_FIRST : 0) | (end === all.byteLength ? CLIP_LAST : 0);
+    out.push({ t: "clip", flags, bytes: all.subarray(at, end) });
+  }
+  return out;
+}
 
 export type InputPacket = { tag: number; seq: number; ev: InputEvent };
 
@@ -207,6 +231,13 @@ export function encodeInput(tag: number, seq: number, ev: InputEvent): Uint8Arra
       body = new TextEncoder().encode(ev.text);
       if (body.byteLength === 0 || body.byteLength > MAX_TEXT_BYTES) throw new RangeError("texto fora do limite");
       break;
+    case "clip":
+      type = IN.CLIP;
+      if (ev.bytes.byteLength === 0 || ev.bytes.byteLength > MAX_TEXT_BYTES) throw new RangeError("pedaço fora do limite");
+      body = new Uint8Array(1 + ev.bytes.byteLength);
+      body[0] = ev.flags & (CLIP_FIRST | CLIP_LAST);
+      body.set(ev.bytes, 1);
+      break;
     case "release":
       type = IN.RELEASE_ALL;
       body = new Uint8Array(0);
@@ -240,7 +271,7 @@ export function decodeInput(bytes: Uint8Array): InputPacket | null {
   const tag = v.getUint32(1);
   const seq = v.getUint16(5);
   const bodyLen = bytes.byteLength - HEADER_BYTES;
-  if (type !== IN.TEXT && BODY_BYTES[type] !== bodyLen) return null;
+  if (type !== IN.TEXT && type !== IN.CLIP && BODY_BYTES[type] !== bodyLen) return null;
   const at = HEADER_BYTES;
   let ev: InputEvent;
   switch (type) {
@@ -275,6 +306,13 @@ export function decodeInput(bytes: Uint8Array): InputPacket | null {
       } catch {
         return null;
       }
+      break;
+    }
+    case IN.CLIP: {
+      if (bodyLen < 2 || bodyLen > MAX_TEXT_BYTES + 1) return null;
+      const flags = v.getUint8(at);
+      if (flags & ~(CLIP_FIRST | CLIP_LAST)) return null;
+      ev = { t: "clip", flags, bytes: bytes.slice(at + 1) };
       break;
     }
     case IN.RELEASE_ALL:

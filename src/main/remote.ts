@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   app,
   BrowserWindow,
+  clipboard,
   globalShortcut,
   ipcMain,
   Notification,
@@ -192,6 +193,8 @@ const gate: RemoteGate = new RemoteGate({
   // Com o auxiliar elevado, o comando passa antes pelo utility (zona
   // protegida) e volta como "forward"; a ordem se mantém.
   inject: (cmd) => child?.postMessage({ type: elevatedLink ? "check" : "inject", cmd }),
+  // Síncrono, no main: um Ctrl+V que vem logo depois já encontra o texto.
+  setClipboard: (text) => clipboard.writeText(text),
   askConsent: (req) => {
     showMainWindow();
     consentNotification(req.name);
@@ -408,6 +411,12 @@ export function registerRemote(): void {
   ipcMain.handle("remote:elevate", async (event) => {
     assertAppSender(event);
     return elevateInput();
+  });
+
+  // Lado de quem controla: o texto copiado aqui, para colar no PC remoto.
+  ipcMain.handle("remote:readClipboard", (event) => {
+    assertAppSender(event);
+    return clipboard.readText();
   });
 
   // Hook de teclado de quem controla: ligado enquanto a tela remota está focada.

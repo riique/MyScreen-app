@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  CLIP_FIRST,
+  CLIP_LAST,
   HEADER_BYTES,
   IN,
+  MAX_CLIP_BYTES,
   MAX_TEXT_BYTES,
+  clipChunks,
   WheelAccumulator,
   decodeInput,
   encodeCtl,
@@ -100,6 +104,27 @@ describe("rc.in", () => {
     const empty = new Uint8Array(HEADER_BYTES);
     empty[0] = IN.TEXT;
     expect(decodeInput(empty)).toBeNull();
+  });
+  it("área de transferência: pedaços de 1 KiB, primeiro e último marcados", () => {
+    // "é" tem 2 bytes: 2049 bytes → 1024 + 1024 + 1, com um caractere partido no meio.
+    const chunks = clipChunks("a" + "é".repeat(MAX_TEXT_BYTES))!;
+    expect(chunks.map((c) => c.flags)).toEqual([CLIP_FIRST, 0, CLIP_LAST]);
+    expect(chunks.map((c) => c.bytes.byteLength)).toEqual([MAX_TEXT_BYTES, MAX_TEXT_BYTES, 1]);
+    for (const c of chunks) expect(decodeInput(encodeInput(1, 1, c))?.ev).toEqual(c);
+    expect(clipChunks("")).toBeNull();
+    expect(clipChunks("a".repeat(MAX_CLIP_BYTES + 1))).toBeNull();
+    expect(clipChunks("a".repeat(MAX_CLIP_BYTES))).toHaveLength(MAX_CLIP_BYTES / MAX_TEXT_BYTES);
+  });
+  it("área de transferência: recusa pedaço vazio, grande demais ou flag desconhecida", () => {
+    const ok = encodeInput(1, 1, { t: "clip", flags: CLIP_LAST, bytes: new Uint8Array([0x61]) });
+    expect(decodeInput(ok.subarray(0, HEADER_BYTES + 1))).toBeNull();
+    const badFlag = ok.slice();
+    badFlag[HEADER_BYTES] = 0x04;
+    expect(decodeInput(badFlag)).toBeNull();
+    const big = new Uint8Array(HEADER_BYTES + 2 + MAX_TEXT_BYTES);
+    big[0] = IN.CLIP;
+    expect(decodeInput(big)).toBeNull();
+    expect(() => encodeInput(1, 1, { t: "clip", flags: 0, bytes: new Uint8Array(0) })).toThrow();
   });
   it("fuzz: bytes aleatórios nunca lançam", () => {
     for (let i = 0; i < 5000; i++) {

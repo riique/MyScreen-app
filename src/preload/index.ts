@@ -71,6 +71,7 @@ const bridge: DesktopBridge = {
     pause: (paused) => ipcRenderer.send("remote:pause", paused),
     elevate: () => ipcRenderer.invoke("remote:elevate"),
     captureKeys: (on) => ipcRenderer.send("remote:captureKeys", on),
+    readClipboard: () => ipcRenderer.invoke("remote:readClipboard"),
     onHookKey: (cb) => subscribe("remote:hookKey", cb),
     onHookState: (cb) => subscribe("remote:hookState", cb),
     onSend: (cb) => subscribe("remote:send", cb),
