@@ -24,7 +24,9 @@ export function ControlToolbar({
   const pausedText =
     state.why === "elevated"
       ? `${state.targetName} está numa janela de administrador. Para você mexer nela, ${state.targetName} precisa clicar em "Liberar" no MyScreen (ao lado de "está controlando").`
-      : state.why === "protected"
+      : state.why === "local-input"
+        ? `${state.targetName} está usando o mouse. O controle volta para você quando ${state.targetName} parar de mexer.`
+        : state.why === "protected"
         ? `O MyScreen de ${state.targetName} está em primeiro plano, e as teclas não chegam nele. Clique em outra janela da tela de ${state.targetName}.`
         : state.paused
           ? `${state.targetName} pausou o controle.`

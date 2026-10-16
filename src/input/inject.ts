@@ -22,6 +22,8 @@ export type Native = {
   InputInjector: new () => Injector;
   startKeyboardHook(ownPid: number, onKey: (packed: number) => void): void;
   stopKeyboardHook(): void;
+  startMouseWatch(onLocal: () => void): void;
+  stopMouseWatch(): void;
   runElevated(exe: string, args: string, hwnd: number): Promise<boolean>;
   connectParentPipe(path: string, serverPid: number, onLine: (line: string) => void): void;
 };

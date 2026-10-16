@@ -104,9 +104,14 @@ type Session = {
   blockedNoticeAt: number;
   /** Área de transferência chegando em pedaços (null: nenhuma em andamento). */
   clip: { parts: Uint8Array[]; size: number } | null;
+  /** A pessoa do PC mexeu no mouse: até este instante, o mouse é dela. */
+  localUntil: number;
+  localTimer: unknown;
 };
 
 const BLOCKED_NOTICE_MS = 1500;
+/** Depois do último movimento físico, quanto tempo o mouse continua com a pessoa do PC. */
+export const LOCAL_YIELD_MS = 1000;
 
 export class RemoteGate {
   private pending: Pending | null = null;
@@ -209,6 +214,8 @@ export class RemoteGate {
       trackSid: share.trackSid,
       display: share.physical,
       paused: false,
+      localUntil: 0,
+      localTimer: null,
       elevated: false,
       appFocused: this.deps.appFocused(),
       lastSeq: null,
@@ -257,8 +264,9 @@ export class RemoteGate {
     if (!pkt || pkt.tag !== s.tag) return false;
     const { ev, seq } = pkt;
 
+    const local = this.localActive(s);
     if (ev.t === "move") {
-      if (s.paused) return false;
+      if (s.paused || local) return false;
       if (s.lastSeq !== null && !seqNewer(seq, s.lastSeq)) return false;
       if (!this.take(s, 1, MOVE_RESERVE)) return false;
     } else {
@@ -268,7 +276,7 @@ export class RemoteGate {
         return false;
       }
       // Soltar é sempre permitido (nada pode ficar preso); o resto respeita a pausa.
-      if (s.paused && !isRelease(ev)) {
+      if ((s.paused || local) && !isRelease(ev)) {
         s.clip = null;
         return false;
       }
@@ -372,6 +380,38 @@ export class RemoteGate {
     this.deps.sessionChanged(this.active);
   }
 
+  private localActive(s: Session): boolean {
+    return s.localUntil > this.deps.now();
+  }
+
+  /**
+   * A pessoa do PC mexeu no mouse de verdade (o vigia avisa a cada ~100 ms
+   * enquanto ela mexe). O controle volta para ela na hora: o que quem
+   * controla segurava é solto, o input dele é descartado e ele vê o aviso.
+   * Volta sozinho LOCAL_YIELD_MS depois do último movimento.
+   */
+  localMouse(): void {
+    const s = this.session;
+    if (!s) return;
+    const was = this.localActive(s);
+    s.localUntil = this.deps.now() + LOCAL_YIELD_MS;
+    if (was) return;
+    this.releaseAll(s);
+    s.clip = null;
+    this.sendState(s);
+    this.scheduleLocalCheck(s, LOCAL_YIELD_MS);
+  }
+
+  private scheduleLocalCheck(s: Session, ms: number): void {
+    s.localTimer = this.deps.setTimer(() => {
+      s.localTimer = null;
+      if (this.session !== s) return;
+      const left = s.localUntil - this.deps.now();
+      if (left > 0) this.scheduleLocalCheck(s, left);
+      else this.sendState(s);
+    }, ms);
+  }
+
   /** O utility viu uma janela de administrador entrar/sair do primeiro plano. */
   setElevated(elevated: boolean): void {
     const s = this.session;
@@ -406,7 +446,9 @@ export class RemoteGate {
   private sendState(s: Session): void {
     const why: PauseWhy | undefined = s.paused
       ? "user"
-      : s.elevated
+      : this.localActive(s)
+        ? "local-input"
+        : s.elevated
         ? "elevated"
         : s.appFocused
           ? "protected"
@@ -458,6 +500,7 @@ export class RemoteGate {
     const s = this.session;
     if (!s) return;
     this.releaseAll(s);
+    if (s.localTimer !== null) this.deps.clearTimer(s.localTimer);
     this.session = null;
     if (notifyPeer) this.deps.send(s.peer.identity, { t: "revoke", sessionId: s.sessionId, reason });
     this.deps.sessionChanged(null, { reason, identity: s.peer.identity, name: s.peer.name });

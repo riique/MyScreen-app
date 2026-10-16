@@ -200,6 +200,22 @@ describe("portão de input", () => {
     expect(t.input({ t: "key", scancode: 0x1e, down: true })).toBe(false);
     expect(t.sent.at(-1)?.msg).toEqual({ t: "state", sessionId: SESSION, paused: true, why: "user" });
   });
+  it("a pessoa do PC mexe no mouse: o controle volta para ela e retorna quando ela para", () => {
+    t.input({ t: "button", button: 0, down: true, x: 10, y: 10 });
+    t.gate.localMouse();
+    expect(t.injected.at(-1)).toEqual({ t: "release" });
+    expect(t.sent.at(-1)?.msg).toEqual({ t: "state", sessionId: SESSION, paused: true, why: "local-input" });
+    expect(t.input({ t: "move", x: 1, y: 1 })).toBe(false);
+    expect(t.input({ t: "button", button: 0, down: true, x: 1, y: 1 })).toBe(false);
+    // Continua mexendo: o prazo estica.
+    t.advance(800);
+    t.gate.localMouse();
+    t.advance(800);
+    expect(t.input({ t: "move", x: 2, y: 2 })).toBe(false);
+    t.advance(300);
+    expect(t.sent.at(-1)?.msg).toEqual({ t: "state", sessionId: SESSION, paused: false });
+    expect(t.input({ t: "move", x: 3, y: 3 })).toBe(true);
+  });
 });
 
 describe("revogação", () => {

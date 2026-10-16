@@ -4,7 +4,9 @@ import { AppBar } from "@/components/AppBar";
 import { GreenRoom, type GreenRoomJoinConfig } from "@/components/conference/GreenRoom";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Sheet } from "@/components/sheet";
-import { readNickname, rememberRoom, writeNickname } from "@/lib/storage";
+import { readMediaPrefs, readNickname, rememberRoom, writeNickname } from "@/lib/storage";
+import type { MediaPrefs } from "@shared/media";
+import { fallbackRoomTitle } from "@shared/room";
 import { ApiError, usePlatform } from "@/platform";
 
 /** O token vive 6 h; renovar a cada 10 min evita cair no meio da chamada. */
@@ -39,6 +41,7 @@ export function RoomScreen({ roomId, onLeave }: { roomId: string; onLeave: () =>
   const platform = usePlatform();
   const [loading, setLoading] = useState(true);
   const [savedNickname, setSavedNickname] = useState<string | null>(null);
+  const [mediaPrefs, setMediaPrefs] = useState<MediaPrefs | null>(null);
   const [roomInfo, setRoomInfo] = useState<{ title: string; isLocked: boolean } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -50,8 +53,10 @@ export function RoomScreen({ roomId, onLeave }: { roomId: string; onLeave: () =>
 
   useEffect(() => {
     let alive = true;
-    void readNickname().then((name) => {
-      if (alive) setSavedNickname(name);
+    void Promise.all([readNickname(), readMediaPrefs()]).then(([name, media]) => {
+      if (!alive) return;
+      setMediaPrefs(media);
+      setSavedNickname(name);
     });
     return () => {
       alive = false;
@@ -64,13 +69,13 @@ export function RoomScreen({ roomId, onLeave }: { roomId: string; onLeave: () =>
       .getRoom(roomId)
       .then((room) => {
         if (!alive) return;
-        setRoomInfo({ title: room.title, isLocked: room.isLocked });
+        setRoomInfo({ title: room.exists ? room.title : fallbackRoomTitle(roomId), isLocked: room.isLocked });
       })
       .catch((error: unknown) => {
         if (!alive) return;
         // Sala efêmera é válida mesmo sem registro; um erro de rede, não.
         if (error instanceof ApiError && error.status === 0) setLoadError(error.message);
-        setRoomInfo({ title: `Sala ${roomId}`, isLocked: false });
+        setRoomInfo({ title: fallbackRoomTitle(roomId), isLocked: false });
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -86,7 +91,7 @@ export function RoomScreen({ roomId, onLeave }: { roomId: string; onLeave: () =>
       try {
         const data = await platform.api.token({ roomId, nickname: config.nickname, password: config.password });
         writeNickname(config.nickname);
-        rememberRoom(roomId, roomInfo?.title ?? `Sala ${roomId}`);
+        rememberRoom(roomId, roomInfo?.title ?? fallbackRoomTitle(roomId));
         setSession({
           token: data.token,
           serverUrl: data.livekitUrl,
@@ -162,6 +167,7 @@ export function RoomScreen({ roomId, onLeave }: { roomId: string; onLeave: () =>
           initialVideoEnabled={session.media.videoEnabled}
           initialAudioDeviceId={session.media.audioDeviceId}
           initialVideoDeviceId={session.media.videoDeviceId}
+          mediaPrefs={mediaPrefs ?? undefined}
           onLeave={onLeave}
           onReconnect={() => void reconnect()}
         />
@@ -183,7 +189,7 @@ export function RoomScreen({ roomId, onLeave }: { roomId: string; onLeave: () =>
         <ThemeToggle />
       </AppBar>
       <main className="min-h-0 flex-1 overflow-y-auto">
-        {loading || savedNickname === null ? (
+        {loading || savedNickname === null || mediaPrefs === null ? (
           <Preparing />
         ) : (
           <div className="mx-auto w-full max-w-[68rem] px-6 py-8">
@@ -196,9 +202,10 @@ export function RoomScreen({ roomId, onLeave }: { roomId: string; onLeave: () =>
             ) : null}
             <GreenRoom
               roomId={roomId}
-              roomTitle={roomInfo?.title || `Sala ${roomId}`}
+              roomTitle={roomInfo?.title || fallbackRoomTitle(roomId)}
               isLocked={Boolean(roomInfo?.isLocked)}
               initialNickname={savedNickname}
+              initialMedia={mediaPrefs}
               onJoin={handleJoin}
             />
           </div>

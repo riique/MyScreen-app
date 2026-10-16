@@ -1,7 +1,9 @@
 
 import { ArrowRight, Mic, MicOff, Video, VideoOff, Volume2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import type { MediaPrefs } from "@shared/media";
 import { Field, Sheet, SheetHead, Stamp, inputClass } from "@/components/sheet";
+import { writeMediaPrefs } from "@/lib/storage";
 
 /** O VU empurra estado para o React a 10 Hz; 60 Hz de re-render é caro e invisível. */
 const METER_THROTTLE_MS = 100;
@@ -22,6 +24,8 @@ interface GreenRoomProps {
   roomTitle: string;
   isLocked: boolean;
   initialNickname?: string;
+  /** Últimos estados salvos: mic/câmera ligados e os aparelhos escolhidos. */
+  initialMedia?: MediaPrefs;
   /**
    * Precisa resolver `true` para travar o lobby. Só o valor estritamente `true`
    * conta: qualquer outro resolutions deixa a pessoa dentro da sala sem token e
@@ -35,18 +39,22 @@ export function GreenRoom({
   roomTitle,
   isLocked,
   initialNickname = "",
+  initialMedia,
   onJoin,
 }: GreenRoomProps) {
   const [nickname, setNickname] = useState(initialNickname);
   const [password, setPassword] = useState("");
-  const [audioEnabled, setAudioEnabled] = useState(true);
-  const [videoEnabled, setVideoEnabled] = useState(true);
+  const [audioEnabled, setAudioEnabled] = useState(initialMedia?.audioEnabled ?? true);
+  const [videoEnabled, setVideoEnabled] = useState(initialMedia?.videoEnabled ?? true);
   const [joining, setJoining] = useState(false);
 
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
-  const [selectedAudioId, setSelectedAudioId] = useState("");
-  const [selectedVideoId, setSelectedVideoId] = useState("");
+  const [selectedAudioId, setSelectedAudioId] = useState(initialMedia?.audioInputId ?? "");
+  const [selectedVideoId, setSelectedVideoId] = useState(initialMedia?.videoInputId ?? "");
+  // Os aparelhos salvos podem ter sido desconectados: se o primeiro getUserMedia
+  // recusar por isso, tenta de novo com o padrão do sistema em vez de travar.
+  const savedDevicesPendingRef = useRef(Boolean(initialMedia?.audioInputId || initialMedia?.videoInputId));
 
   const [audioLevel, setAudioLevel] = useState(0);
   const [audioBlocked, setAudioBlocked] = useState(false);
@@ -127,6 +135,7 @@ export function GreenRoom({
           stream.getTracks().forEach((t) => t.stop());
           return;
         }
+        savedDevicesPendingRef.current = false;
 
         streamRef.current?.getTracks().forEach((t) => t.stop());
         streamRef.current = stream;
@@ -199,6 +208,16 @@ export function GreenRoom({
         animFrameRef.current = requestAnimationFrame(checkVolume);
       } catch (error) {
         if (!active) return;
+        if (
+          savedDevicesPendingRef.current &&
+          error instanceof DOMException &&
+          (error.name === "OverconstrainedError" || error.name === "NotFoundError")
+        ) {
+          savedDevicesPendingRef.current = false;
+          setSelectedAudioId("");
+          setSelectedVideoId("");
+          return;
+        }
         console.warn("Permissão de mídia negada ou dispositivo indisponível:", error);
         setHasPermissionError(true);
         if (error instanceof DOMException && error.name === "NotReadableError") {
@@ -261,6 +280,7 @@ export function GreenRoom({
       t.enabled = next;
     });
     setAudioEnabled(next);
+    writeMediaPrefs({ audioEnabled: next });
   }
 
   function toggleVideo() {
@@ -270,6 +290,7 @@ export function GreenRoom({
       t.enabled = next;
     });
     setVideoEnabled(next);
+    writeMediaPrefs({ videoEnabled: next });
   }
 
   async function handleJoinClick(event: React.SyntheticEvent<HTMLFormElement>) {
@@ -289,7 +310,16 @@ export function GreenRoom({
         videoDeviceId: selectedDeviceId(selectedVideoId, videoDevices),
       })) === true;
 
-    if (!entered) setJoining(false);
+    if (!entered) {
+      setJoining(false);
+      return;
+    }
+    const audioInputId = selectedDeviceId(selectedAudioId, audioDevices);
+    const videoInputId = selectedDeviceId(selectedVideoId, videoDevices);
+    writeMediaPrefs({
+      ...(audioInputId ? { audioInputId } : {}),
+      ...(videoInputId ? { videoInputId } : {}),
+    });
   }
 
   return (
@@ -455,7 +485,10 @@ export function GreenRoom({
               <select
                 id="greenroom-audio-device"
                 value={selectedAudioId}
-                onChange={(e) => setSelectedAudioId(e.target.value)}
+                onChange={(e) => {
+                  setSelectedAudioId(e.target.value);
+                  writeMediaPrefs({ audioInputId: e.target.value });
+                }}
                 disabled={joining || audioDevices.length === 0}
                 className={inputClass}
               >
@@ -474,7 +507,10 @@ export function GreenRoom({
               <select
                 id="greenroom-video-device"
                 value={selectedVideoId}
-                onChange={(e) => setSelectedVideoId(e.target.value)}
+                onChange={(e) => {
+                  setSelectedVideoId(e.target.value);
+                  writeMediaPrefs({ videoInputId: e.target.value });
+                }}
                 disabled={joining || videoDevices.length === 0}
                 className={inputClass}
               >

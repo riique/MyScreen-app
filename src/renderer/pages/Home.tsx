@@ -1,7 +1,7 @@
-import { ArrowRight, Clock, Download, Lock, Plus, Settings2, X } from "lucide-react";
+import { ArrowRight, Clock, Download, Lock, Plus, Settings2, Users, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { UpdateStatus } from "@shared/ipc";
-import { compareVersions, parseRoomInput } from "@shared/room";
+import { compareVersions, GENERAL_ROOM_ID, GENERAL_ROOM_TITLE, parseRoomInput } from "@shared/room";
 import { AppBar } from "@/components/AppBar";
 import { AppSettingsDialog } from "@/components/AppSettingsDialog";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -138,7 +138,33 @@ export function Home({ onEnterRoom }: { onEnterRoom: (id: string) => void }) {
             sem eco da chamada, e dá para levar só o som da janela escolhida.
           </p>
 
-          <Sheet className="mt-10 overflow-hidden">
+          {/* Atalho para a sala de sempre: mesmo código, nada para criar. */}
+          <Sheet className="mt-10 flex flex-wrap items-center justify-between gap-4 px-8 py-6">
+            <div className="min-w-0">
+              <h2 className="flex items-center gap-2 text-[1.375rem] font-semibold tracking-[-0.02em] text-ink">
+                <Users size={20} strokeWidth={1.75} aria-hidden className="text-signal" />
+                {GENERAL_ROOM_TITLE}
+              </h2>
+              <p className="mt-1.5 text-[0.9375rem] leading-[1.55] text-ink-2">
+                A sala de sempre, com o mesmo código: <span className="font-mono text-ink">{GENERAL_ROOM_ID}</span>.
+              </p>
+            </div>
+            <button
+              type="button"
+              autoFocus
+              disabled={outdated}
+              onClick={() => {
+                rememberRoom(GENERAL_ROOM_ID, GENERAL_ROOM_TITLE);
+                onEnterRoom(GENERAL_ROOM_ID);
+              }}
+              className="inline-flex h-12 items-center justify-center gap-2 border border-signal bg-signal px-6 text-[0.9375rem] font-semibold text-on-signal transition-colors hover:border-signal-2 hover:bg-signal-2 disabled:pointer-events-none disabled:opacity-60 [border-radius:var(--radius-sheet)]"
+            >
+              Entrar na {GENERAL_ROOM_TITLE}
+              <ArrowRight size={18} strokeWidth={1.75} aria-hidden />
+            </button>
+          </Sheet>
+
+          <Sheet className="mt-6 overflow-hidden">
             <div className="grid md:grid-cols-2">
               <form onSubmit={handleCreate} className="flex flex-col p-8">
                 <h2 className="text-[1.375rem] font-semibold tracking-[-0.02em] text-ink">Criar uma sala</h2>

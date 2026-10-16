@@ -1,3 +1,5 @@
+import type { MediaPrefs } from "./media";
+
 /**
  * Contrato entre o renderer e o processo principal. O preload expõe
  * exatamente esta forma em `window.myscreen` — funções estreitas, nunca o
@@ -70,7 +72,12 @@ export interface AppSettings {
   autoDownloadUpdates: boolean;
   /** "Nunca aceitar pedidos de controle": o app nem anuncia que pode ser controlado. */
   remoteControlDisabled: boolean;
+  /** Últimos estados de microfone e câmera, aparelhos e aprimoramentos. */
+  media: MediaPrefs;
 }
+
+/** `media` também vai em pedaços: o main mescla com o que já está salvo. */
+export type AppSettingsPatch = Partial<Omit<AppSettings, "media">> & { media?: Partial<MediaPrefs> };
 
 export interface RoomState {
   inRoom: boolean;
@@ -148,7 +155,7 @@ export interface DesktopBridge {
   };
   settings: {
     get(): Promise<AppSettings>;
-    set(patch: Partial<AppSettings>): Promise<ApiResult<AppSettings>>;
+    set(patch: AppSettingsPatch): Promise<ApiResult<AppSettings>>;
   };
   api: {
     createRoom(input: { title: string; password?: string }): Promise<ApiResult<RoomInfo>>;

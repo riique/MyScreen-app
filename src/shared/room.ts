@@ -3,6 +3,19 @@
  * Electron: valem para o processo principal, o renderer e os testes.
  */
 
+/**
+ * A sala fixa de todo mundo: sempre o mesmo código, para não precisar criar
+ * uma a cada vez. Os códigos criados pelo servidor têm outra forma
+ * (abc-def-ghi), então ninguém consegue registrar esta com senha.
+ */
+export const GENERAL_ROOM_ID = "geral";
+export const GENERAL_ROOM_TITLE = "Sala Geral";
+
+/** Título de reserva quando o servidor não tem registro da sala. */
+export function fallbackRoomTitle(roomId: string): string {
+  return roomId === GENERAL_ROOM_ID ? GENERAL_ROOM_TITLE : `Sala ${roomId}`;
+}
+
 /** Teto de um id de sala (o servidor aceita até 64). */
 export const MAX_ROOM_ID_LENGTH = 64;
 

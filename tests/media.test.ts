@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { bestGridTile, bestSplitColumns, hwndFromSourceId, screenBitrate } from "@shared/media";
+import {
+  bestGridTile,
+  bestSplitColumns,
+  DEFAULT_MEDIA_PREFS,
+  hwndFromSourceId,
+  parseMediaPrefs,
+  screenBitrate,
+} from "@shared/media";
 
 describe("screenBitrate", () => {
   it("segue o orçamento do site", () => {
@@ -36,5 +43,21 @@ describe("hwndFromSourceId", () => {
     expect(hwndFromSourceId("window:197346:0")).toBe(197346n);
     expect(hwndFromSourceId("screen:0:0")).toBeNull();
     expect(hwndFromSourceId("window:abc:0")).toBeNull();
+  });
+});
+
+describe("preferências de mídia", () => {
+  it("mescla só os campos válidos sobre a base", () => {
+    const base = { ...DEFAULT_MEDIA_PREFS, audioInputId: "mic-1" };
+    expect(parseMediaPrefs({ audioEnabled: false, videoInputId: "cam-2", noiseSuppression: "x", extra: 1 }, base)).toEqual({
+      ...base,
+      audioEnabled: false,
+      videoInputId: "cam-2",
+    });
+  });
+  it("lixo vira o padrão", () => {
+    expect(parseMediaPrefs(null)).toEqual(DEFAULT_MEDIA_PREFS);
+    expect(parseMediaPrefs([1, 2])).toEqual(DEFAULT_MEDIA_PREFS);
+    expect(parseMediaPrefs({ audioInputId: "x".repeat(300) })).toEqual(DEFAULT_MEDIA_PREFS);
   });
 });

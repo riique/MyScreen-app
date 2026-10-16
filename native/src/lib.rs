@@ -347,6 +347,28 @@ pub fn stop_keyboard_hook() {
     input::hook::stop();
 }
 
+type PingFn = ThreadsafeFunction<(), (), (), Status, false, false, 16>;
+
+/// Liga o vigia do mouse físico do lado controlado. `onLocal` é chamado (no
+/// máximo a cada 100 ms) enquanto a pessoa mexe no mouse de verdade.
+#[napi]
+pub fn start_mouse_watch(on_local: Function<(), ()>) -> Result<()> {
+    let tsfn: PingFn = on_local
+        .build_threadsafe_function::<()>()
+        .callee_handled::<false>()
+        .max_queue_size::<16>()
+        .build()?;
+    input::mousewatch::start(Box::new(move || {
+        let _ = tsfn.call((), ThreadsafeFunctionCallMode::NonBlocking);
+    }))
+    .map_err(Error::from_reason)
+}
+
+#[napi]
+pub fn stop_mouse_watch() {
+    input::mousewatch::stop();
+}
+
 // ---------------------------------------------------------------- janelas de administrador
 
 pub struct ElevateTask {
