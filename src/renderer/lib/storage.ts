@@ -3,6 +3,8 @@
  * uma sala: ela vive só na memória da sessão.
  */
 
+import { DEFAULT_MEDIA_PREFS, type MediaPrefs } from "@shared/media";
+
 const NICKNAME_KEY = "myscreen:nickname";
 const RECENT_KEY = "myscreen:recent";
 const MAX_RECENT = 8;
@@ -29,6 +31,19 @@ export async function readNickname(): Promise<string> {
     // Cai no localStorage.
   }
   return readLocalNickname();
+}
+
+/** Últimos estados de mídia (em disco, junto do apelido). */
+export async function readMediaPrefs(): Promise<MediaPrefs> {
+  try {
+    return (await window.myscreen.settings.get()).media ?? DEFAULT_MEDIA_PREFS;
+  } catch {
+    return DEFAULT_MEDIA_PREFS;
+  }
+}
+
+export function writeMediaPrefs(patch: Partial<MediaPrefs>): void {
+  void window.myscreen.settings.set({ media: patch }).catch(() => {});
 }
 
 export function writeNickname(nickname: string): void {
@@ -84,5 +99,51 @@ export function forgetRoom(id: string): void {
     localStorage.setItem(RECENT_KEY, JSON.stringify(readRecent().filter((r) => r.id !== id)));
   } catch {
     // idem
+  }
+}
+
+// ---------------------------------------------------------------- volume da tela
+
+const SCREEN_VOLUMES_KEY = "myscreen:screen-volumes";
+const MAX_SCREEN_VOLUMES = 64;
+
+function validVolume(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1;
+}
+
+/** De quem é o volume: o nome sobrevive entre reuniões; a identidade, não. */
+export function screenVolumeKey(p: { name?: string; identity: string }): string {
+  const name = p.name?.trim().toLowerCase();
+  return name ? `name:${name}` : `id:${p.identity}`;
+}
+
+function readVolumes(): Record<string, number> {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(SCREEN_VOLUMES_KEY) ?? "{}");
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(raw)) if (validVolume(v)) out[k] = v;
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** Volume guardado para essa pessoa; sem um, 100%. */
+export function readScreenVolume(key: string): number {
+  const own = readVolumes()[key];
+  return validVolume(own) ? own : 1;
+}
+
+export function writeScreenVolume(key: string, volume: number): void {
+  try {
+    const all = readVolumes();
+    delete all[key];
+    all[key] = volume;
+    // Mais recentes no fim: corta os mais antigos.
+    const entries = Object.entries(all).slice(-MAX_SCREEN_VOLUMES);
+    localStorage.setItem(SCREEN_VOLUMES_KEY, JSON.stringify(Object.fromEntries(entries)));
+  } catch {
+    // Sem storage, o volume vale só para esta sessão.
   }
 }

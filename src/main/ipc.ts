@@ -16,6 +16,7 @@ import {
 } from "./security";
 import { createRoom, desktopInfo, getRoom, token } from "./server";
 import { getSettings, updateSettings } from "./settings";
+import { parseMediaPrefs } from "../shared/media";
 import { applyAutoDownload, checkForUpdates, configureFeed, downloadUpdate, installUpdate, updateStatus } from "./updater";
 import { applyTheme, getMainWindow, openExternalSafely, setSharing } from "./windows";
 import { normalizeRoomId } from "../shared/room";
@@ -123,6 +124,8 @@ export function registerIpc(): void {
     if (patch.remoteControlDisabled !== undefined) {
       next.remoteControlDisabled = asBoolean(patch.remoteControlDisabled, "remoteControlDisabled");
     }
+    // Patch parcial: mescla com o que já está salvo.
+    if (patch.media !== undefined) next.media = parseMediaPrefs(patch.media, getSettings().media);
     const saved = updateSettings(next);
     // Desligou o recurso com alguém controlando: vale na hora.
     if (saved.remoteControlDisabled) stopRemoteControl();

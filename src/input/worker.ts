@@ -18,6 +18,8 @@ type Command =
   | { type: "check"; cmd: InjectCommand }
   | { type: "watch"; on: boolean }
   | { type: "hook"; on: boolean }
+  /** Lado controlado: avisa quando a dona do PC mexe no mouse de verdade. */
+  | { type: "localWatch"; on: boolean }
   | { type: "elevate"; exe: string; args: string; hwnd: number };
 
 const parent = process.parentPort;
@@ -27,6 +29,7 @@ let injector: InstanceType<Native["InputInjector"]> | null = null;
 /** PID do processo principal do MyScreen: dono de todas as janelas do app. */
 let ownPid = 0;
 let hookOn = false;
+let localWatchOn = false;
 let dryRun = false;
 let loadError: string | null = null;
 let selfElevated = false;
@@ -122,6 +125,21 @@ function setHook(on: boolean): void {
   }
 }
 
+/**
+ * Lado controlado: o hook de mouse só observa. Cada aviso (no máximo a cada
+ * 100 ms) diz ao portão que a pessoa do PC está usando o mouse agora.
+ */
+function setLocalWatch(on: boolean): void {
+  if (on === localWatchOn || !native || dryRun) return;
+  try {
+    if (on) native.startMouseWatch(() => parent.postMessage({ type: "localMouse" }));
+    else native.stopMouseWatch();
+    localWatchOn = on;
+  } catch (error) {
+    parent.postMessage({ type: "error", message: error instanceof Error ? error.message : String(error) });
+  }
+}
+
 parent.on("message", (event) => {
   const cmd = event.data as Command;
   switch (cmd.type) {
@@ -145,6 +163,9 @@ parent.on("message", (event) => {
       break;
     case "hook":
       setHook(cmd.on);
+      break;
+    case "localWatch":
+      setLocalWatch(cmd.on);
       break;
     case "elevate":
       elevate(cmd.exe, cmd.args, cmd.hwnd);

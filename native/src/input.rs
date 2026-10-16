@@ -453,6 +453,107 @@ pub mod hook {
     }
 }
 
+/// Vigia do mouse físico (lado controlado). Um hook de mouse de baixo nível
+/// que só observa — nunca engole nada — e avisa quando a dona do computador
+/// mexe no mouse de verdade (evento não injetado). O portão usa isso para
+/// devolver o mouse a ela na hora: quem está no PC tem prioridade.
+#[cfg(windows)]
+pub mod mousewatch {
+    use super::EXTRA_INFO;
+    use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
+    use std::sync::Mutex;
+    use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::System::SystemInformation::GetTickCount64;
+    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CallNextHookEx, GetMessageW, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx, HC_ACTION,
+        LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT, WH_MOUSE_LL, WM_MOUSEMOVE, WM_QUIT,
+    };
+
+    pub type Sink = Box<dyn Fn() + Send + Sync>;
+
+    /// No máximo um aviso a cada isto: o portão só precisa saber que continua.
+    const NOTIFY_EVERY_MS: u64 = 100;
+
+    static ACTIVE: AtomicBool = AtomicBool::new(false);
+    static THREAD: AtomicU32 = AtomicU32::new(0);
+    static LAST_NOTIFY: AtomicU64 = AtomicU64::new(0);
+    /// Última posição física vista (x << 32 | y): movimento sem deslocamento não conta.
+    static LAST_PT: AtomicI64 = AtomicI64::new(i64::MIN);
+    static SINK: Mutex<Option<Sink>> = Mutex::new(None);
+
+    unsafe extern "system" fn proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        if code == HC_ACTION as i32 && ACTIVE.load(Ordering::Relaxed) {
+            let info = &*(lparam as *const MSLLHOOKSTRUCT);
+            let physical = info.flags & LLMHF_INJECTED == 0 && info.dwExtraInfo != EXTRA_INFO;
+            if physical {
+                let pt = ((info.pt.x as i64) << 32) | (info.pt.y as u32 as i64);
+                let moved = LAST_PT.swap(pt, Ordering::Relaxed) != pt;
+                if wparam as u32 != WM_MOUSEMOVE || moved {
+                    let now = GetTickCount64();
+                    let last = LAST_NOTIFY.load(Ordering::Relaxed);
+                    if now.saturating_sub(last) >= NOTIFY_EVERY_MS {
+                        LAST_NOTIFY.store(now, Ordering::Relaxed);
+                        if let Some(sink) = SINK.lock().unwrap().as_ref() {
+                            sink();
+                        }
+                    }
+                }
+            }
+        }
+        CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+    }
+
+    /// Liga o vigia numa thread própria (com laço de mensagens). Idempotente.
+    pub fn start(sink: Sink) -> Result<(), String> {
+        *SINK.lock().unwrap() = Some(sink);
+        LAST_PT.store(i64::MIN, Ordering::Relaxed);
+        LAST_NOTIFY.store(0, Ordering::Relaxed);
+        ACTIVE.store(true, Ordering::SeqCst);
+        if THREAD.load(Ordering::SeqCst) != 0 {
+            return Ok(());
+        }
+        let (tx, rx) = std::sync::mpsc::channel::<Result<u32, String>>();
+        std::thread::Builder::new()
+            .name("myscreen-mousewatch".into())
+            .spawn(move || unsafe {
+                let hook = SetWindowsHookExW(WH_MOUSE_LL, Some(proc), GetModuleHandleW(std::ptr::null()), 0);
+                if hook.is_null() {
+                    let _ = tx.send(Err("SetWindowsHookExW (mouse) falhou".into()));
+                    return;
+                }
+                let _ = tx.send(Ok(GetCurrentThreadId()));
+                let mut msg: MSG = std::mem::zeroed();
+                while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {}
+                UnhookWindowsHookEx(hook);
+            })
+            .map_err(|e| e.to_string())?;
+        match rx.recv() {
+            Ok(Ok(id)) => {
+                THREAD.store(id, Ordering::SeqCst);
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                ACTIVE.store(false, Ordering::SeqCst);
+                Err(e)
+            }
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    pub fn stop() {
+        ACTIVE.store(false, Ordering::SeqCst);
+        *SINK.lock().unwrap() = None;
+        let id = THREAD.swap(0, Ordering::SeqCst);
+        if id != 0 {
+            unsafe {
+                PostThreadMessageW(id, WM_QUIT, 0, 0);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

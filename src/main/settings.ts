@@ -2,6 +2,7 @@ import { readFileSync, renameSync, writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { app } from "electron";
 import type { AppSettings } from "../shared/ipc";
+import { DEFAULT_MEDIA_PREFS, parseMediaPrefs } from "../shared/media";
 import { normalizeServerUrl } from "./security";
 
 /**
@@ -22,6 +23,7 @@ const DEFAULTS: AppSettings = {
   nickname: "",
   autoDownloadUpdates: true,
   remoteControlDisabled: false,
+  media: DEFAULT_MEDIA_PREFS,
 };
 
 let current: AppSettings | null = null;
@@ -39,6 +41,7 @@ function parse(raw: unknown): AppSettings {
   if (typeof v.autoDownloadUpdates === "boolean") out.autoDownloadUpdates = v.autoDownloadUpdates;
   if (typeof v.remoteControlDisabled === "boolean") out.remoteControlDisabled = v.remoteControlDisabled;
   if (typeof v.nickname === "string") out.nickname = v.nickname.trim().slice(0, 64);
+  out.media = parseMediaPrefs(v.media);
   return out;
 }
 

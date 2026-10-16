@@ -74,3 +74,43 @@ export function hwndFromSourceId(id: string): bigint | null {
     return null;
   }
 }
+
+/**
+ * Últimas escolhas de mídia da pessoa (microfone/câmera ligados, aparelhos e
+ * aprimoramentos do microfone). Valem para a próxima sala.
+ */
+export type MediaPrefs = {
+  audioEnabled: boolean;
+  videoEnabled: boolean;
+  /** "" = o padrão do sistema. */
+  audioInputId: string;
+  videoInputId: string;
+  audioOutputId: string;
+  echoCancellation: boolean;
+  noiseSuppression: boolean;
+  autoGainControl: boolean;
+};
+
+export const DEFAULT_MEDIA_PREFS: MediaPrefs = {
+  audioEnabled: true,
+  videoEnabled: true,
+  audioInputId: "",
+  videoInputId: "",
+  audioOutputId: "",
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+};
+
+const BOOL_KEYS = ["audioEnabled", "videoEnabled", "echoCancellation", "noiseSuppression", "autoGainControl"] as const;
+const ID_KEYS = ["audioInputId", "videoInputId", "audioOutputId"] as const;
+
+/** Aplica sobre `base` só os campos válidos de `raw`; o resto é ignorado. */
+export function parseMediaPrefs(raw: unknown, base: MediaPrefs = DEFAULT_MEDIA_PREFS): MediaPrefs {
+  const out = { ...base };
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return out;
+  const v = raw as Record<string, unknown>;
+  for (const k of BOOL_KEYS) if (typeof v[k] === "boolean") out[k] = v[k];
+  for (const k of ID_KEYS) if (typeof v[k] === "string" && v[k].length <= 256) out[k] = v[k];
+  return out;
+}

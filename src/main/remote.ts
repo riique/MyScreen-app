@@ -41,6 +41,7 @@ type WorkerMessage =
   | { type: "blocked" }
   | { type: "forward"; cmd: InjectCommand }
   | { type: "hookKey"; scancode: number; down: boolean }
+  | { type: "localMouse" }
   | { type: "hook-error"; message: string }
   | { type: "dryrun"; cmd: InjectCommand }
   | { type: "elevate"; ok: boolean; error: string | null };
@@ -90,6 +91,9 @@ function ensureChild(): UtilityProcess {
       case "blocked":
         // Clique sobre o MyScreen da pessoa controlada: descartado de propósito.
         gate.blocked();
+        break;
+      case "localMouse":
+        gate.localMouse();
         break;
       case "forward":
         elevatedLink?.write(`${JSON.stringify(msg.cmd)}\n`);
@@ -297,6 +301,7 @@ function onSessionChanged(info: SessionInfo | null, ended: RemoteSessionEvent["e
   const event: RemoteSessionEvent = { session: info, ended };
   sendToMain("remote:session", event);
   syncWatch(info !== null);
+  child?.postMessage({ type: "localWatch", on: info !== null });
   syncPanic(info !== null);
   notifyElevated(info);
   for (const fn of sessionListeners) fn(info !== null);

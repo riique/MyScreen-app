@@ -24,18 +24,20 @@ import {
   RemoteTrackPublication,
   RoomEvent,
   Track,
+  TrackEvent,
   VideoPresets,
   VideoQuality,
   supportsAudioOutputSelection,
   type LocalTrackPublication,
   type Participant,
   type RemoteParticipant,
+  type RemoteTrack,
   type ScreenShareCaptureOptions,
   type TrackPublishOptions,
 } from "livekit-client";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AudioCapabilities, CaptureSource, SystemAudioMode } from "@shared/ipc";
-import { RESOLUTION, SCREEN_BITRATE, screenBitrate } from "@shared/media";
+import { DEFAULT_MEDIA_PREFS, RESOLUTION, SCREEN_BITRATE, screenBitrate, type MediaPrefs } from "@shared/media";
 import { ATTR_VERSION, RC_VERSION } from "@shared/remote/protocol";
 import { ChatSidebar } from "./ChatSidebar";
 import { MediaControls } from "./MediaControls";
@@ -50,6 +52,7 @@ import { ControlToolbar } from "./remote/ControlToolbar";
 import { PANIC_SHORTCUT_LABEL } from "./remote/labels";
 import { useRemoteControlHost, type HostShare } from "./remote/useRemoteControlHost";
 import { useRemoteControlViewer, type RemoteViewer } from "./remote/useRemoteControlViewer";
+import { readScreenVolume, screenVolumeKey, writeMediaPrefs, writeScreenVolume } from "@/lib/storage";
 import {
   readCapture,
   readSystemAudio,
@@ -111,6 +114,8 @@ export interface ConferenceRoomProps {
   initialVideoEnabled?: boolean;
   initialAudioDeviceId?: string;
   initialVideoDeviceId?: string;
+  /** Aprimoramentos do microfone e saída de áudio salvos da última vez. */
+  mediaPrefs?: MediaPrefs;
   onLeave: () => void;
   onReconnect: () => void;
 }
@@ -127,6 +132,7 @@ export function ConferenceRoom({
   initialVideoEnabled = true,
   initialAudioDeviceId,
   initialVideoDeviceId,
+  mediaPrefs = DEFAULT_MEDIA_PREFS,
   onLeave,
   onReconnect,
 }: ConferenceRoomProps) {
@@ -166,9 +172,9 @@ export function ConferenceRoom({
           initialAudioEnabled
             ? {
                 deviceId: initialAudioDeviceId,
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
+                echoCancellation: mediaPrefs.echoCancellation,
+                noiseSuppression: mediaPrefs.noiseSuppression,
+                autoGainControl: mediaPrefs.autoGainControl,
               }
             : false
         }
@@ -183,6 +189,7 @@ export function ConferenceRoom({
           dynacast: true,
           webAudioMix: true,
           stopLocalTrackOnUnpublish: true,
+          ...(mediaPrefs.audioOutputId ? { audioOutput: { deviceId: mediaPrefs.audioOutputId } } : {}),
           videoCaptureDefaults: { resolution: VideoPresets.h1080.resolution },
           publishDefaults: {
             videoEncoding: { maxBitrate: 3_000_000, maxFramerate: 30, priority: "high" },
@@ -197,7 +204,14 @@ export function ConferenceRoom({
         className="flex min-h-0 flex-1 flex-col"
       >
         <RoomAudioRenderer />
-        <ConferenceStage roomId={roomId} token={token} onLeave={leave} />
+        <ConferenceStage
+          roomId={roomId}
+          token={token}
+          onLeave={leave}
+          mediaPrefs={mediaPrefs}
+          initialAudioDeviceId={initialAudioDeviceId}
+          initialVideoDeviceId={initialVideoDeviceId}
+        />
       </LiveKitRoom>
 
       {fatalError ? (
@@ -229,7 +243,21 @@ export function ConferenceRoom({
 
 type SystemAudioHandle = { track: MediaStreamTrack; close(): void };
 
-function ConferenceStage({ roomId, token, onLeave }: { roomId: string; token: string; onLeave: () => void }) {
+function ConferenceStage({
+  roomId,
+  token,
+  onLeave,
+  mediaPrefs,
+  initialAudioDeviceId,
+  initialVideoDeviceId,
+}: {
+  roomId: string;
+  token: string;
+  onLeave: () => void;
+  mediaPrefs: MediaPrefs;
+  initialAudioDeviceId?: string;
+  initialVideoDeviceId?: string;
+}) {
   const platform = usePlatform();
   const room = useRoomContext();
   const {
@@ -247,9 +275,12 @@ function ConferenceStage({ roomId, token, onLeave }: { roomId: string; token: st
       screenResolution: prefs.resolution,
       screenContentType: "motion",
       systemAudio: true,
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
+      echoCancellation: mediaPrefs.echoCancellation,
+      noiseSuppression: mediaPrefs.noiseSuppression,
+      autoGainControl: mediaPrefs.autoGainControl,
+      audioInputId: initialAudioDeviceId,
+      videoInputId: initialVideoDeviceId,
+      audioOutputId: mediaPrefs.audioOutputId || undefined,
     };
   });
   // Espelho síncrono: dois ajustes seguidos não podem partir do mesmo estado velho.
@@ -426,8 +457,9 @@ function ConferenceStage({ roomId, token, onLeave }: { roomId: string; token: st
     function pinHighQuality(publication: RemoteTrackPublication) {
       if (publication.kind === Track.Kind.Video) publication.setVideoQuality(VideoQuality.HIGH);
     }
-    function onSubscribed(_track: unknown, publication: RemoteTrackPublication) {
+    function onSubscribed(track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant) {
       pinHighQuality(publication);
+      if (publication.source === Track.Source.ScreenShareAudio) applyScreenVolume(track, participant);
     }
     for (const participant of room.remoteParticipants.values()) {
       for (const publication of participant.trackPublications.values()) {
@@ -454,13 +486,15 @@ function ConferenceStage({ roomId, token, onLeave }: { roomId: string; token: st
 
   const toggleMic = useCallback(async () => {
     const current = settingsRef.current;
+    const next = !localParticipant.isMicrophoneEnabled;
     try {
-      await localParticipant.setMicrophoneEnabled(!localParticipant.isMicrophoneEnabled, {
+      await localParticipant.setMicrophoneEnabled(next, {
         deviceId: current.audioInputId,
         echoCancellation: current.echoCancellation,
         noiseSuppression: current.noiseSuppression,
         autoGainControl: current.autoGainControl,
       });
+      writeMediaPrefs({ audioEnabled: next });
     } catch (error) {
       console.error("Erro ao alternar microfone:", error);
       throw new Error(mediaFailure(error, "microfone"));
@@ -468,10 +502,12 @@ function ConferenceStage({ roomId, token, onLeave }: { roomId: string; token: st
   }, [localParticipant]);
 
   const toggleCam = useCallback(async () => {
+    const next = !localParticipant.isCameraEnabled;
     try {
-      await localParticipant.setCameraEnabled(!localParticipant.isCameraEnabled, {
+      await localParticipant.setCameraEnabled(next, {
         deviceId: settingsRef.current.videoInputId,
       });
+      writeMediaPrefs({ videoEnabled: next });
     } catch (error) {
       console.error("Erro ao alternar câmera:", error);
       throw new Error(mediaFailure(error, "câmera"));
@@ -705,6 +741,14 @@ function ConferenceStage({ roomId, token, onLeave }: { roomId: string; token: st
 
       settingsRef.current = next;
       setSettings(next);
+      writeMediaPrefs({
+        echoCancellation: next.echoCancellation,
+        noiseSuppression: next.noiseSuppression,
+        autoGainControl: next.autoGainControl,
+        audioInputId: next.audioInputId ?? "",
+        videoInputId: next.videoInputId ?? "",
+        audioOutputId: next.audioOutputId ?? "",
+      });
     },
     [localParticipant, room],
   );
@@ -1703,26 +1747,40 @@ function Tile({
   );
 }
 
-const SCREEN_VOLUME_KEY = "myscreen:screen-volume";
-
-function readScreenVolume(): number {
-  try {
-    const raw = localStorage.getItem(SCREEN_VOLUME_KEY);
-    const v = raw === null ? NaN : Number(raw);
-    return Number.isFinite(v) && v >= 0 && v <= 1 ? v : 1;
-  } catch {
-    return 1;
-  }
+/**
+ * Aplica à faixa de som da tela que acabou de chegar o volume guardado para
+ * quem compartilha. Toda vez que a tela para e volta é uma faixa nova, que
+ * nasce em 100%: sem isto o controle mostrava o valor salvo e tocava no máximo.
+ * O SDK só reaplica o volume no `attach` quando ele não é zero, e o ganho do
+ * Web Audio nasce depois do evento — então reaplica também logo após anexar.
+ */
+function applyScreenVolume(track: RemoteTrack, participant: RemoteParticipant) {
+  if (track.kind !== Track.Kind.Audio) return;
+  const audio = track as RemoteTrack & { setVolume(v: number): void };
+  const current = () => readScreenVolume(screenVolumeKey(participant));
+  participant.setVolume(current(), Track.Source.ScreenShareAudio);
+  audio.setVolume(current());
+  track.on(TrackEvent.ElementAttached, () => {
+    setTimeout(() => audio.setVolume(current()), 0);
+  });
 }
 
 /**
  * Volume do som da tela compartilhada, só para quem assiste. Não mexe na voz
- * de ninguém: só na faixa de áudio da tela. A escolha vale para as próximas
- * telas também (fica no navegador).
+ * de ninguém: só na faixa de áudio da tela. Fica guardado por pessoa (pelo
+ * nome) e vale para as próximas telas dela, nesta e nas próximas reuniões.
  */
 function ScreenVolume({ participant }: { participant: RemoteParticipant }) {
-  const [volume, setVolume] = useState(readScreenVolume);
+  const key = screenVolumeKey(participant);
+  const [volume, setVolume] = useState(() => readScreenVolume(key));
   const lastAudible = useRef(volume > 0 ? volume : 1);
+
+  // Outra pessoa no mesmo quadro: mostra o volume dela.
+  useEffect(() => {
+    const v = readScreenVolume(key);
+    setVolume(v);
+    if (v > 0) lastAudible.current = v;
+  }, [key]);
 
   useEffect(() => {
     participant.setVolume(volume, Track.Source.ScreenShareAudio);
@@ -1731,11 +1789,7 @@ function ScreenVolume({ participant }: { participant: RemoteParticipant }) {
   const apply = (v: number) => {
     setVolume(v);
     if (v > 0) lastAudible.current = v;
-    try {
-      localStorage.setItem(SCREEN_VOLUME_KEY, String(v));
-    } catch {
-      // Sem storage, o volume vale só para esta sessão.
-    }
+    writeScreenVolume(key, v);
   };
 
   const Icon = volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
