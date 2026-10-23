@@ -161,3 +161,12 @@ describe("WheelAccumulator", () => {
     expect(w.add(0, 0.5, 0)).toEqual({ dx: 0, dy: -1 });
   });
 });
+
+describe("rc.ctl clip", () => {
+  it("valida a confirmação de área de transferência", () => {
+    const ok = { t: "clip", sessionId: "EBESExQVFhcYGRobHB0eHw", clipId: "ICEiIyQlJicoKSorLC0uLw", ok: true };
+    expect(parseCtl(ok)).toEqual(ok);
+    expect(parseCtl({ ...ok, ok: "sim" })).toBeNull();
+    expect(parseCtl({ ...ok, clipId: "../x" })).toBeNull();
+  });
+});

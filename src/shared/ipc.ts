@@ -111,6 +111,23 @@ export type ShortcutAction = "mic" | "cam" | "stop-share";
 
 // ---------------------------------------------------------------- controle remoto
 
+/** O que quem controla copiou, pronto para mandar ao PC controlado. */
+export type RichClipboard =
+  | { kind: "same" }
+  | { kind: "empty" }
+  | { kind: "text"; key: string; text: string }
+  | { kind: "image"; key: string; name: string; bytes: Uint8Array }
+  | { kind: "files"; key: string; files: { name: string; bytes: Uint8Array }[]; skippedFolders: number }
+  | { kind: "unsupported"; key: string; message: string };
+
+/** Imagem/arquivos recebidos por byte stream, para o portão conferir e gravar. */
+export interface ClipDelivery {
+  sessionId: string;
+  clipId: string;
+  kind: "image" | "files";
+  files: { name: string; bytes: Uint8Array }[];
+}
+
 export interface RemoteCapabilities {
   /** O injetor nativo carregou: este PC pode ser controlado. */
   available: boolean;
@@ -152,6 +169,8 @@ export interface DesktopBridge {
     setTheme(effective: "light" | "dark", preference: ThemePreference): void;
     openPrivacySettings(kind: "webcam" | "microphone"): void;
     openExternal(url: string): void;
+    /** Link clicado no chat: qualquer http(s), no navegador padrão. */
+    openLink(url: string): void;
   };
   settings: {
     get(): Promise<AppSettings>;
@@ -210,6 +229,10 @@ export interface DesktopBridge {
     captureKeys(on: boolean): void;
     /** Lado de quem controla: o texto da área de transferência deste PC. */
     readClipboard(): Promise<string>;
+    /** Lado de quem controla: texto, imagem ou arquivos copiados aqui (`same` se nada mudou desde `lastKey`). */
+    readClipboardRich(lastKey: string | null): Promise<RichClipboard>;
+    /** Lado controlado: imagem/arquivos chegaram de quem controla; o main decide se entram. */
+    deliverClip(from: RemotePeer, clip: ClipDelivery): void;
     /** Tecla física engolida pelo hook (scancode do protocolo). */
     onHookKey(cb: (scancode: number, down: boolean) => void): () => void;
     /** O hook ligou (true) ou não está disponível/desligou (false). */
@@ -219,6 +242,15 @@ export interface DesktopBridge {
     onConsent(cb: (req: RemoteConsentRequest) => void): () => void;
     onConsentClosed(cb: (reqId: string) => void): () => void;
     onSession(cb: (event: RemoteSessionEvent) => void): () => void;
+  };
+  recording: {
+    /** Cria o arquivo em Vídeos\MyScreen; o id identifica os pedaços seguintes. */
+    open(label: string, ext: "mp4" | "webm"): Promise<{ id: string; file: string }>;
+    write(id: string, bytes: Uint8Array): void;
+    /** Fecha o arquivo; resolve com o caminho dele (null se já estava fechado). */
+    close(id: string): Promise<string | null>;
+    /** Mostra o arquivo no Explorer, ou abre a pasta das gravações. */
+    reveal(file: string | null): void;
   };
   updates: {
     status(): Promise<UpdateStatus>;

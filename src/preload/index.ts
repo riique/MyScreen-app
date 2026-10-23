@@ -26,6 +26,7 @@ const bridge: DesktopBridge = {
     setTheme: (effective, preference) => ipcRenderer.send("app:setTheme", effective, preference),
     openPrivacySettings: (kind) => ipcRenderer.send("app:openPrivacy", kind),
     openExternal: (url) => ipcRenderer.send("app:openExternal", url),
+    openLink: (url) => ipcRenderer.send("app:openLink", url),
   },
   settings: {
     get: () => ipcRenderer.invoke("settings:get"),
@@ -72,12 +73,20 @@ const bridge: DesktopBridge = {
     elevate: () => ipcRenderer.invoke("remote:elevate"),
     captureKeys: (on) => ipcRenderer.send("remote:captureKeys", on),
     readClipboard: () => ipcRenderer.invoke("remote:readClipboard"),
+    readClipboardRich: (lastKey) => ipcRenderer.invoke("remote:readClipboardRich", lastKey),
+    deliverClip: (from, clip) => ipcRenderer.send("remote:deliverClip", from, clip),
     onHookKey: (cb) => subscribe("remote:hookKey", cb),
     onHookState: (cb) => subscribe("remote:hookState", cb),
     onSend: (cb) => subscribe("remote:send", cb),
     onConsent: (cb) => subscribe("remote:consent", cb),
     onConsentClosed: (cb) => subscribe("remote:consentClosed", cb),
     onSession: (cb) => subscribe("remote:session", cb),
+  },
+  recording: {
+    open: (label, ext) => ipcRenderer.invoke("recording:open", label, ext),
+    write: (id, bytes) => ipcRenderer.send("recording:write", id, bytes),
+    close: (id) => ipcRenderer.invoke("recording:close", id),
+    reveal: (file) => ipcRenderer.send("recording:reveal", file),
   },
   updates: {
     status: () => ipcRenderer.invoke("updates:status"),

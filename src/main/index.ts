@@ -5,6 +5,7 @@ import { createTray, destroyTray, getRoomState, handleArgv, hintTray, registerPr
 import { installPermissionHandlers, registerIpc } from "./ipc";
 import { inputHelperArgs, runInputHelper } from "./inputHelper";
 import { handleAppProtocol, registerSchemePrivileges } from "./protocol";
+import { closeAllRecordings } from "./recording";
 import { shutdownRemote, watchMainWindow } from "./remote";
 import { DEV_SERVER_URL } from "./security";
 import { startUpdater } from "./updater";
@@ -90,6 +91,7 @@ if (inputHelper) {
     quitting = true;
     shutdownRemote();
     shutdownAudio();
+    closeAllRecordings();
     destroyTray();
   });
   app.on("activate", () => {

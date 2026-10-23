@@ -368,6 +368,25 @@ export class RemoteGate {
     this.deps.inject({ t: "release" });
   }
 
+  // ------------------------------------------------------------ área de transferência (imagem/arquivos)
+
+  /**
+   * Imagem ou arquivos que quem controla copiou chegaram por byte stream. Só
+   * entram vindos de quem controla agora, nesta sessão, sem pausa — o mesmo
+   * que vale para uma tecla.
+   */
+  acceptsClip(from: Peer, sessionId: string): boolean {
+    const s = this.session;
+    return Boolean(s && s.sessionId === sessionId && this.isSessionPeer(from) && !s.paused);
+  }
+
+  /** Avisa quem controla que a área de transferência de cá ficou (ou não) pronta. */
+  clipResult(sessionId: string, clipId: string, ok: boolean): void {
+    const s = this.session;
+    if (!s || s.sessionId !== sessionId) return;
+    this.deps.send(s.peer.identity, { t: "clip", sessionId, clipId, ok });
+  }
+
   // ------------------------------------------------------------ estado e fim
 
   /** Pausa pela pessoa controlada (pílula da sala). Solta tudo ao pausar. */

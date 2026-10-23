@@ -1,8 +1,11 @@
 import { RoomEvent, type Participant, type RemoteParticipant, type Room } from "livekit-client";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { RichClipboard } from "@shared/ipc";
 import {
+  CLIP_ATTR,
   CONSENT_TIMEOUT_MS,
   RC_VERSION,
+  TOPIC_CLIP,
   TOPIC_CTL,
   TOPIC_IN,
   encodeCtl,
@@ -43,8 +46,18 @@ export type ViewerState =
       rttMs: number | null;
     };
 
+/** Imagem/arquivos indo para a área de transferência do PC controlado. */
+export type ClipNotice = { tone: "busy" | "ok" | "error"; text: string };
+
 export interface RemoteViewer {
   state: ViewerState;
+  clipNotice: ClipNotice | null;
+  /**
+   * Manda ao PC controlado a imagem ou os arquivos copiados aqui. Resolve
+   * quando o outro lado confirma que já estão na área de transferência dele
+   * (ou desistiu): só então um Ctrl+V cola o conteúdo novo.
+   */
+  sendClip(clip: RichClipboard): Promise<void>;
   notice: string | null;
   dismissNotice(): void;
   request(participant: Participant): void;
@@ -54,6 +67,9 @@ export interface RemoteViewer {
 }
 
 const PING_INTERVAL_MS = 2000;
+/** Sem resposta do outro lado em tanto tempo, a transferência é dada como perdida. */
+const CLIP_ACK_TIMEOUT_MS = 120_000;
+const CLIP_NOTICE_MS = 4000;
 
 function denyText(name: string, reason: DenyReason): string {
   switch (reason) {
@@ -101,6 +117,15 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
   const pingN = useRef(0);
   const blockedTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(blockedTimer.current), []);
+  const [clipNotice, setClipNotice] = useState<ClipNotice | null>(null);
+  const clipTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const clipWaits = useRef(new Map<string, (ok: boolean) => void>());
+  useEffect(() => () => clearTimeout(clipTimer.current), []);
+  const showClip = useCallback((notice: ClipNotice | null) => {
+    clearTimeout(clipTimer.current);
+    setClipNotice(notice);
+    if (notice && notice.tone !== "busy") clipTimer.current = setTimeout(() => setClipNotice(null), CLIP_NOTICE_MS);
+  }, []);
 
   const sendCtl = useCallback(
     (to: string, msg: Ctl) => {
@@ -124,6 +149,58 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
         });
     },
     [room],
+  );
+
+  const sendClip = useCallback(
+    async (clip: RichClipboard) => {
+      const s = stateRef.current;
+      if (s.phase !== "active") return;
+      if (clip.kind === "unsupported") {
+        showClip({ tone: "error", text: clip.message });
+        return;
+      }
+      if (clip.kind !== "image" && clip.kind !== "files") return;
+      const files = clip.kind === "image" ? [{ name: clip.name, bytes: clip.bytes }] : clip.files;
+      const what =
+        clip.kind === "image" ? "a imagem" : files.length === 1 ? `"${files[0].name}"` : `${files.length} arquivos`;
+      const clipId = randomId();
+      showClip({ tone: "busy", text: `Levando ${what} para a área de transferência de ${s.targetName}…` });
+      const ack = new Promise<boolean>((resolve) => {
+        clipWaits.current.set(clipId, resolve);
+        setTimeout(() => {
+          if (clipWaits.current.delete(clipId)) resolve(false);
+        }, CLIP_ACK_TIMEOUT_MS);
+      });
+      try {
+        for (const [index, file] of files.entries()) {
+          await room.localParticipant.sendBytes(file.bytes, {
+            topic: TOPIC_CLIP,
+            destinationIdentities: [s.target],
+            name: file.name,
+            mimeType: clip.kind === "image" ? "image/png" : "application/octet-stream",
+            attributes: {
+              [CLIP_ATTR.session]: s.sessionId,
+              [CLIP_ATTR.clip]: clipId,
+              [CLIP_ATTR.kind]: clip.kind,
+              [CLIP_ATTR.index]: String(index),
+              [CLIP_ATTR.count]: String(files.length),
+            },
+          });
+        }
+      } catch (error) {
+        console.warn("Área de transferência não saiu:", error);
+        clipWaits.current.get(clipId)?.(false);
+        clipWaits.current.delete(clipId);
+      }
+      const ok = await ack;
+      const skipped = clip.kind === "files" && clip.skippedFolders > 0 ? " (pastas ficaram de fora)" : "";
+      showClip(
+        ok
+          ? { tone: "ok", text: `Pronto: Ctrl+V cola ${what} no PC de ${s.targetName}${skipped}.` }
+          : { tone: "error", text: `Não foi possível levar ${what} para o PC de ${s.targetName}.` },
+      );
+    },
+    [room, showClip],
   );
 
   const request = useCallback(
@@ -205,6 +282,13 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
           blockedTimer.current = setTimeout(() => set(false), 3500);
           break;
         }
+        case "clip": {
+          if (s.phase !== "active" || msg.sessionId !== s.sessionId) return;
+          const resolve = clipWaits.current.get(msg.clipId);
+          clipWaits.current.delete(msg.clipId);
+          resolve?.(msg.ok);
+          break;
+        }
         case "pong": {
           if (s.phase !== "active" || msg.sessionId !== s.sessionId) return;
           const sent = pings.current.get(msg.n);
@@ -283,5 +367,13 @@ export function useRemoteControlViewer(room: Room): RemoteViewer {
 
   const dismissNotice = useCallback(() => setNotice(null), []);
 
-  return { state, notice, dismissNotice, request, cancel, stop, send };
+  // A sessão acabou: o que estava esperando confirmação desiste.
+  useEffect(() => {
+    if (sessionKey) return;
+    for (const resolve of clipWaits.current.values()) resolve(false);
+    clipWaits.current.clear();
+    showClip(null);
+  }, [sessionKey, showClip]);
+
+  return { state, clipNotice, sendClip, notice, dismissNotice, request, cancel, stop, send };
 }

@@ -1,5 +1,6 @@
 
 import {
+  Circle,
   Maximize,
   Mic,
   MicOff,
@@ -32,6 +33,9 @@ export interface MediaControlsProps {
   onToggleMic: () => void;
   onToggleCam: () => void;
   onToggleScreenShare: () => void;
+  /** Quantas fontes estão gravando agora (0 = nenhuma). */
+  recordingCount: number;
+  onRecord: () => void;
   onToggleFullscreen: () => void;
   onOpenSettings: () => void;
   onLeave: () => void;
@@ -48,6 +52,8 @@ export function MediaControls({
   onToggleMic,
   onToggleCam,
   onToggleScreenShare,
+  recordingCount,
+  onRecord,
   onToggleFullscreen,
   onOpenSettings,
   onLeave,
@@ -83,6 +89,25 @@ export function MediaControls({
         {isScreenSharing ? <MonitorX {...ICON} /> : <MonitorUp {...ICON} />}
         <span className="hidden text-[0.8125rem] font-semibold sm:inline">
           {isScreenSharing ? "Parar" : "Compartilhar"}
+        </span>
+      </DockButton>
+
+      <DockButton
+        tone={recordingCount > 0 ? "off" : "idle"}
+        onClick={onRecord}
+        pressed={recordingCount > 0}
+        label={recordingCount > 0 ? "Gravações em andamento" : "Gravar câmera e tela"}
+        wide
+      >
+        <Circle
+          {...ICON}
+          size={14}
+          strokeWidth={0}
+          fill="currentColor"
+          className={cn(recordingCount > 0 ? "animate-pulse text-[#d92d20]" : "text-[#d92d20]")}
+        />
+        <span className="hidden text-[0.8125rem] font-semibold sm:inline">
+          {recordingCount > 0 ? `Gravando${recordingCount > 1 ? ` ${recordingCount}` : ""}` : "Gravar"}
         </span>
       </DockButton>
 
