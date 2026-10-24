@@ -10,13 +10,20 @@ import { getMainWindow } from "./windows";
  * Com "baixar automaticamente" ligado, baixa em segundo plano; desligado, só
  * avisa e espera o botão "Baixar". NUNCA instala no meio de uma chamada: a home
  * mostra "Reiniciar e atualizar", e sair do app também aplica.
+ *
+ * Sempre a versão mais nova do feed: uma versão baixada que ficou velha (saiu
+ * outra enquanto o app estava aberto) é trocada pela nova, e "Reiniciar e
+ * atualizar" confere o feed antes de instalar. Assim quem está várias versões
+ * atrás atualiza uma vez só.
  */
 
-const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
+const CHECK_EVERY_MS = 30 * 60 * 1000;
 let status: UpdateStatus = { state: "idle" };
 let started = false;
 /** A verificação em curso foi pedida no botão: erro e "nada novo" viram aviso. */
 let manualCheck = false;
+/** O usuário pediu para instalar: conferido o feed, instala o que estiver pronto. */
+let installRequested = false;
 
 function publish(next: UpdateStatus): void {
   status = next;
@@ -51,19 +58,36 @@ export function startUpdater(): void {
   });
   autoUpdater.on("update-available", (info) => {
     manualCheck = false;
-    publish(
-      autoUpdater.autoDownload ? { state: "downloading", percent: 0 } : { state: "available", version: info.version },
-    );
+    const stale = status.state === "ready" && status.version !== info.version;
+    if (status.state === "ready" && !stale) {
+      // A pronta já é a mais nova (sem download automático não há evento depois).
+      if (!autoUpdater.autoDownload) finishInstallRequest();
+      return;
+    }
+    if (autoUpdater.autoDownload) {
+      publish({ state: "downloading", percent: 0 });
+    } else if (stale || installRequested) {
+      // Já aceitou baixar uma versão: a mais nova entra no lugar dela sem perguntar.
+      startDownload();
+    } else {
+      publish({ state: "available", version: info.version });
+    }
   });
   autoUpdater.on("download-progress", (p) => publish({ state: "downloading", percent: Math.round(p.percent) }));
-  autoUpdater.on("update-downloaded", (info) => publish({ state: "ready", version: info.version }));
+  autoUpdater.on("update-downloaded", (info) => {
+    publish({ state: "ready", version: info.version });
+    finishInstallRequest();
+  });
   autoUpdater.on("update-not-available", () => {
     manualCheck = false;
+    if (status.state === "ready") return finishInstallRequest();
     publish({ state: "uptodate", checkedAt: Date.now() });
   });
   autoUpdater.on("error", (error) => {
     console.warn("Atualização falhou:", error);
-    if (status.state === "ready") return;
+    // Servidor fora do ar na hora de instalar: a versão pronta ainda serve.
+    if (status.state === "ready") return finishInstallRequest();
+    installRequested = false;
     // A checagem de fundo falhar é rotina (servidor fora do ar): só o botão vira aviso.
     publish(manualCheck ? { state: "error", message: "Não foi possível falar com o servidor de atualizações." } : { state: "idle" });
     manualCheck = false;
@@ -87,11 +111,24 @@ export function checkForUpdates(): void {
 
 export function downloadUpdate(): void {
   if (!started || status.state !== "available") return;
+  startDownload();
+}
+
+function startDownload(): void {
   publish({ state: "downloading", percent: 0 });
   void autoUpdater.downloadUpdate().catch(() => {});
 }
 
+/** "Reiniciar e atualizar": confere o feed antes, para não instalar uma versão que já ficou velha. */
 export function installUpdate(): void {
+  if (status.state !== "ready" || getRoomState().inRoom || installRequested) return;
+  installRequested = true;
+  void autoUpdater.checkForUpdates().catch(() => {});
+}
+
+function finishInstallRequest(): void {
+  if (!installRequested) return;
+  installRequested = false;
   if (status.state !== "ready" || getRoomState().inRoom) return;
   autoUpdater.quitAndInstall(false, true);
 }
