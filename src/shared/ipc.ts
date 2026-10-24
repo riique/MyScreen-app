@@ -72,12 +72,22 @@ export interface AppSettings {
   autoDownloadUpdates: boolean;
   /** "Nunca aceitar pedidos de controle": o app nem anuncia que pode ser controlado. */
   remoteControlDisabled: boolean;
+  /** Mostra, na chamada, o botão que toca os áudios do servidor para a sala. */
+  soundboardEnabled: boolean;
   /** Últimos estados de microfone e câmera, aparelhos e aprimoramentos. */
   media: MediaPrefs;
 }
 
 /** `media` também vai em pedaços: o main mescla com o que já está salvo. */
 export type AppSettingsPatch = Partial<Omit<AppSettings, "media">> & { media?: Partial<MediaPrefs> };
+
+/** Um áudio da pasta do servidor que pode ser tocado na chamada. */
+export interface SoundInfo {
+  /** Nome do arquivo no servidor. */
+  id: string;
+  name: string;
+  size: number;
+}
 
 export interface RoomState {
   inRoom: boolean;
@@ -187,6 +197,10 @@ export interface DesktopBridge {
       identityProof?: string;
     }): Promise<ApiResult<TokenResponse>>;
     desktopInfo(): Promise<ApiResult<{ minVersion: string | null }>>;
+    /** Áudios que o servidor oferece para tocar na chamada. */
+    listSounds(): Promise<ApiResult<SoundInfo[]>>;
+    /** Bytes de um áudio da lista, para decodificar e tocar. */
+    fetchSound(id: string): Promise<ApiResult<Uint8Array>>;
   };
   capture: {
     list(): Promise<CaptureSource[]>;

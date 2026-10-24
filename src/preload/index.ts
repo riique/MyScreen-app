@@ -37,6 +37,8 @@ const bridge: DesktopBridge = {
     getRoom: (id) => ipcRenderer.invoke("api:getRoom", id),
     token: (input) => ipcRenderer.invoke("api:token", input),
     desktopInfo: () => ipcRenderer.invoke("api:desktopInfo"),
+    listSounds: () => ipcRenderer.invoke("api:listSounds"),
+    fetchSound: (id) => ipcRenderer.invoke("api:fetchSound", id),
   },
   capture: {
     list: () => ipcRenderer.invoke("capture:list"),

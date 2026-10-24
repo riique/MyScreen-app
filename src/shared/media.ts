@@ -6,13 +6,17 @@ export type ScreenResolution = "720p" | "1080p" | "1440p";
 
 /**
  * Orçamento de bits da tela por resolução, em 30 FPS. 60 FPS ganha 50% a mais
- * (o dobro de quadros disputando o mesmo orçamento).
+ * (o dobro de quadros disputando o mesmo orçamento). Acima do site: o app
+ * publica sem simulcast, então esta é a única camada.
  */
 export const SCREEN_BITRATE: Record<ScreenResolution, number> = {
-  "720p": 3_500_000,
-  "1080p": 6_000_000,
-  "1440p": 9_000_000,
+  "720p": 5_000_000,
+  "1080p": 8_000_000,
+  "1440p": 12_000_000,
 };
+
+/** Teto da câmera (camada de 1080p). */
+export const CAMERA_BITRATE = 5_000_000;
 
 export function screenBitrate(resolution: ScreenResolution, fps: number): number {
   const factor = fps >= 60 ? 1.5 : 1;

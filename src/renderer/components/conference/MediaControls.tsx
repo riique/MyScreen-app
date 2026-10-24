@@ -39,7 +39,7 @@ export interface MediaControlsProps {
   onToggleFullscreen: () => void;
   onOpenSettings: () => void;
   onLeave: () => void;
-  /** Controle extra ao lado do compartilhar (o som do PC, quando no ar). */
+  /** Controles extras depois do gravar (áudios, som do PC quando no ar). */
   extra?: ReactNode;
 }
 

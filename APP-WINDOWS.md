@@ -504,8 +504,8 @@ publicando com `publishTrack(new LocalVideoTrack(track), { source: Track.Source.
 
 ### 8.4 Qualidade de captura
 
-- **Orçamento de bits** (igual ao site, `SCREEN_BITRATE`): 720p 3,5 Mbps · 1080p 6 Mbps ·
-  4K 14 Mbps a 30 FPS; ×1,5 a 60 FPS; ×0,6 a 15 FPS.
+- **Orçamento de bits** (`SCREEN_BITRATE`, acima do site): 720p 5 Mbps · 1080p 8 Mbps ·
+  1440p 12 Mbps a 30 FPS; ×1,5 a 60 FPS.
 - **Uma camada só** (`simulcast: false`): quem assiste recebe sempre a tela inteira.
 - **`contentHint`**: "Texto" = `detail` (segura a resolução, cai a taxa); "Vídeo e jogos" =
   `motion` (segura a taxa, cai a resolução). Manter o texto explicativo do site.
@@ -657,7 +657,8 @@ companion. As escolhas ficam em `myscreen:system-audio`.
 - **Câmera ocupada por outro app** (Teams, OBS): no Windows ela costuma dar `NotReadableError`.
   Mensagem específica: "A câmera está em uso por outro aplicativo".
 - **Opções da sala** (iguais ao site): `videoCaptureDefaults.resolution = 1080p`; câmera
-  publicada a até 3 Mbps / 30 FPS, prioridade alta, `maintain-resolution`; mic com AEC, NS e AGC
+  publicada a até 5 Mbps / 30 FPS, prioridade alta, simulcast 1080p/720p/360p, `maintain-framerate`
+  (padrão do SDK para câmera: sob aperto perde nitidez em vez de congelar); mic com AEC, NS e AGC
   ligados por padrão e alterados ao vivo com `applyConstraints`; trocas de dispositivo por
   `room.switchActiveDevice` (nunca `restartTrack`, que perde o `deviceId`).
 - **Saída de áudio**: `setSinkId` funciona no Chromium do Electron; o seletor de alto-falante

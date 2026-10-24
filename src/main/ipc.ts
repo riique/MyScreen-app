@@ -15,7 +15,7 @@ import {
   isAppUrl,
   normalizeServerUrl,
 } from "./security";
-import { createRoom, desktopInfo, getRoom, token } from "./server";
+import { createRoom, desktopInfo, fetchSound, getRoom, listSounds, token } from "./server";
 import { getSettings, updateSettings } from "./settings";
 import { parseMediaPrefs } from "../shared/media";
 import { applyAutoDownload, checkForUpdates, configureFeed, downloadUpdate, installUpdate, updateStatus } from "./updater";
@@ -126,6 +126,9 @@ export function registerIpc(): void {
     if (patch.remoteControlDisabled !== undefined) {
       next.remoteControlDisabled = asBoolean(patch.remoteControlDisabled, "remoteControlDisabled");
     }
+    if (patch.soundboardEnabled !== undefined) {
+      next.soundboardEnabled = asBoolean(patch.soundboardEnabled, "soundboardEnabled");
+    }
     // Patch parcial: mescla com o que já está salvo.
     if (patch.media !== undefined) next.media = parseMediaPrefs(patch.media, getSettings().media);
     const saved = updateSettings(next);
@@ -157,6 +160,8 @@ export function registerIpc(): void {
     });
   });
   handle("api:desktopInfo", () => desktopInfo());
+  handle("api:listSounds", () => listSounds());
+  handle("api:fetchSound", (_e, id) => fetchSound(asString(id, "soundId", 200)));
 
   // --- captura
   handle("capture:list", () => listCaptureSources());

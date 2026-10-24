@@ -37,7 +37,14 @@ import {
 } from "livekit-client";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AudioCapabilities, CaptureSource, SystemAudioMode } from "@shared/ipc";
-import { DEFAULT_MEDIA_PREFS, RESOLUTION, SCREEN_BITRATE, screenBitrate, type MediaPrefs } from "@shared/media";
+import {
+  CAMERA_BITRATE,
+  DEFAULT_MEDIA_PREFS,
+  RESOLUTION,
+  SCREEN_BITRATE,
+  screenBitrate,
+  type MediaPrefs,
+} from "@shared/media";
 import { ATTR_VERSION, RC_VERSION } from "@shared/remote/protocol";
 import { ChatSidebar } from "./ChatSidebar";
 import { MediaControls } from "./MediaControls";
@@ -54,6 +61,8 @@ import { useRemoteControlHost, type HostShare } from "./remote/useRemoteControlH
 import { useRemoteControlViewer, type RemoteViewer } from "./remote/useRemoteControlViewer";
 import { formatElapsed } from "@shared/recording";
 import { RecordDialog, useNow, type RecordOption } from "./recording/RecordDialog";
+import { SoundboardControl } from "./soundboard/SoundboardControl";
+import { useSoundboard } from "./soundboard/useSoundboard";
 import { useRecording } from "./recording/useRecording";
 import { readScreenVolume, screenVolumeKey, writeMediaPrefs, writeScreenVolume } from "@/lib/storage";
 import {
@@ -195,13 +204,18 @@ export function ConferenceRoom({
           ...(mediaPrefs.audioOutputId ? { audioOutput: { deviceId: mediaPrefs.audioOutputId } } : {}),
           videoCaptureDefaults: { resolution: VideoPresets.h1080.resolution },
           publishDefaults: {
-            videoEncoding: { maxBitrate: 3_000_000, maxFramerate: 30, priority: "high" },
+            videoEncoding: { maxBitrate: CAMERA_BITRATE, maxFramerate: 30, priority: "high" },
+            // Camadas da câmera em 1080p, 720p e 360p: com a rede apertada, quem
+            // assiste desce um degrau em vez de ficar sem quadro.
+            videoSimulcastLayers: [VideoPresets.h360, VideoPresets.h720],
             screenShareEncoding: {
               maxBitrate: SCREEN_BITRATE["1080p"],
               maxFramerate: 30,
               priority: "high",
             },
-            degradationPreference: "maintain-resolution",
+            // Sem `degradationPreference` aqui: o padrão do SDK é
+            // `maintain-framerate` na câmera (sob aperto ela perde nitidez, não
+            // congela) e a tela recebe a sua em `startScreenShare`.
           },
         }}
         className="flex min-h-0 flex-1 flex-col"
@@ -324,8 +338,12 @@ function ConferenceStage({
   // O que está no ar (só tela inteira pode ser controlada).
   const [hostShare, setHostShare] = useState<HostShare | null>(null);
   const [remoteDisabled, setRemoteDisabled] = useState(false);
+  const [soundboardEnabled, setSoundboardEnabled] = useState(false);
   useEffect(() => {
-    void window.myscreen.settings.get().then((s) => setRemoteDisabled(s.remoteControlDisabled));
+    void window.myscreen.settings.get().then((s) => {
+      setRemoteDisabled(s.remoteControlDisabled);
+      setSoundboardEnabled(s.soundboardEnabled);
+    });
   }, []);
   const remoteHost = useRemoteControlHost({
     room,
@@ -343,6 +361,9 @@ function ConferenceStage({
     sendChat: chat.send,
   });
   const [isRecordOpen, setIsRecordOpen] = useState(false);
+
+  /* --- Áudios do servidor (o botão só aparece para quem ligou; o som, todos ouvem) */
+  const soundboard = useSoundboard(room);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
@@ -1204,17 +1225,20 @@ function ConferenceStage({
           onOpenSettings={() => setIsSettingsOpen(true)}
           onLeave={handleLeave}
           extra={
-            systemAudioActive ? (
-              <SystemAudioControl
-                prefs={audioPrefs}
-                paused={audioPaused}
-                onChange={updateAudioPrefs}
-                onPausedChange={(p) => {
-                  setAudioPaused(p);
-                  window.myscreen.audio.update({ paused: p });
-                }}
-              />
-            ) : null
+            <>
+              {soundboardEnabled ? <SoundboardControl board={soundboard} /> : null}
+              {systemAudioActive ? (
+                <SystemAudioControl
+                  prefs={audioPrefs}
+                  paused={audioPaused}
+                  onChange={updateAudioPrefs}
+                  onPausedChange={(p) => {
+                    setAudioPaused(p);
+                    window.myscreen.audio.update({ paused: p });
+                  }}
+                />
+              ) : null}
+            </>
           }
         />
       </footer>

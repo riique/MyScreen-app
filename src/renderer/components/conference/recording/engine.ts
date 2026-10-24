@@ -240,6 +240,9 @@ export class RecordingEngine {
       if (mic) tracks.push(mic);
       const screen = withScreen ? liveTrack(p, Track.Source.ScreenShareAudio) : null;
       if (screen) tracks.push(screen);
+      // Áudio tocado para a sala (botão de áudios): faz parte da chamada.
+      const sound = mode === "call" ? liveTrack(p, Track.Source.Unknown) : null;
+      if (sound) tracks.push(sound);
     }
     return tracks;
   }

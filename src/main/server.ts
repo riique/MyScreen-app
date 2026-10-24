@@ -1,5 +1,5 @@
 import { app, net } from "electron";
-import type { ApiResult, RoomInfo, TokenResponse } from "../shared/ipc";
+import type { ApiResult, RoomInfo, SoundInfo, TokenResponse } from "../shared/ipc";
 import { getSettings } from "./settings";
 
 /**
@@ -138,5 +138,52 @@ export async function desktopInfo(): Promise<ApiResult<{ minVersion: string | nu
     return { ok: true, data: { minVersion: typeof v === "string" && /^\d+\.\d+\.\d+/.test(v) ? v : null } };
   } catch {
     return { ok: true, data: { minVersion: null } };
+  }
+}
+
+// ---------------------------------------------------------------- áudios da chamada
+
+/** O mesmo teto do servidor: o arquivo vem inteiro pela IPC. */
+const MAX_SOUND_BYTES = 25 * 1024 * 1024;
+const SOUND_TIMEOUT_MS = 60_000;
+
+/** `GET /api/sounds`. Servidor sem a rota (404) é só uma lista vazia. */
+export async function listSounds(): Promise<ApiResult<SoundInfo[]>> {
+  try {
+    const { status, data, retryAfter } = await request("/api/sounds");
+    if (status === 404) return { ok: true, data: [] };
+    if (status < 200 || status >= 300) return errorFrom(status, data, retryAfter, "Não foi possível carregar os áudios.");
+    const raw = (data as { sounds?: unknown } | null)?.sounds;
+    const sounds: SoundInfo[] = [];
+    for (const item of Array.isArray(raw) ? raw : []) {
+      const r = (typeof item === "object" && item !== null ? item : {}) as Record<string, unknown>;
+      if (typeof r.id !== "string" || !r.id || r.id.length > 200) continue;
+      sounds.push({
+        id: r.id,
+        name: typeof r.name === "string" && r.name ? r.name.slice(0, 120) : r.id,
+        size: typeof r.size === "number" && Number.isFinite(r.size) ? r.size : 0,
+      });
+    }
+    return { ok: true, data: sounds };
+  } catch (error) {
+    return networkError(error);
+  }
+}
+
+/** `GET /api/sounds/:id`: os bytes do arquivo, para o renderer decodificar. */
+export async function fetchSound(id: string): Promise<ApiResult<Uint8Array>> {
+  try {
+    const res = await net.fetch(`${getSettings().serverUrl}/api/sounds/${encodeURIComponent(id)}`, {
+      headers: { "User-Agent": `MyScreenDesktop/${app.getVersion()}` },
+      cache: "no-store",
+      signal: AbortSignal.timeout(SOUND_TIMEOUT_MS),
+    });
+    if (!res.ok) return fail(res.status, res.status === 404 ? "Esse áudio não está mais no servidor." : `Falha ao baixar o áudio (${res.status}).`);
+    if (Number(res.headers.get("content-length")) > MAX_SOUND_BYTES) return fail(413, "Áudio grande demais.");
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.byteLength > MAX_SOUND_BYTES) return fail(413, "Áudio grande demais.");
+    return { ok: true, data: bytes };
+  } catch (error) {
+    return networkError(error);
   }
 }
