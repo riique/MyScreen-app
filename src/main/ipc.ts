@@ -3,6 +3,7 @@ import type { SharingState, SystemAudioMode, ThemePreference } from "../shared/i
 import { audioCapabilities, startAudio, stopAudio, updateAudio } from "./audio";
 import { listCaptureSources, selectCaptureSource } from "./capture";
 import { consumePendingRoom, notify, refreshShortcuts, setRoomState } from "./integration";
+import { closeRecording, openRecording, revealRecording, writeRecording } from "./recording";
 import { registerRemote, stopRemoteControl } from "./remote";
 import {
   asBoolean,
@@ -14,11 +15,11 @@ import {
   isAppUrl,
   normalizeServerUrl,
 } from "./security";
-import { createRoom, desktopInfo, getRoom, token } from "./server";
+import { createRoom, desktopInfo, fetchSound, getRoom, listSounds, token } from "./server";
 import { getSettings, updateSettings } from "./settings";
 import { parseMediaPrefs } from "../shared/media";
 import { applyAutoDownload, checkForUpdates, configureFeed, downloadUpdate, installUpdate, updateStatus } from "./updater";
-import { applyTheme, getMainWindow, openExternalSafely, setSharing } from "./windows";
+import { applyTheme, getMainWindow, openChatLink, openExternalSafely, setSharing } from "./windows";
 import { normalizeRoomId } from "../shared/room";
 
 // ---------------------------------------------------------------- permissões
@@ -97,6 +98,7 @@ export function registerIpc(): void {
     openExternalSafely(kind === "microphone" ? "ms-settings:privacy-microphone" : "ms-settings:privacy-webcam");
   });
   on("app:openExternal", (_e, url) => openExternalSafely(asString(url, "url", 2048)));
+  on("app:openLink", (_e, url) => openChatLink(asString(url, "url", 4096)));
 
   // --- configurações
   handle("settings:get", () => getSettings());
@@ -123,6 +125,9 @@ export function registerIpc(): void {
     }
     if (patch.remoteControlDisabled !== undefined) {
       next.remoteControlDisabled = asBoolean(patch.remoteControlDisabled, "remoteControlDisabled");
+    }
+    if (patch.soundboardEnabled !== undefined) {
+      next.soundboardEnabled = asBoolean(patch.soundboardEnabled, "soundboardEnabled");
     }
     // Patch parcial: mescla com o que já está salvo.
     if (patch.media !== undefined) next.media = parseMediaPrefs(patch.media, getSettings().media);
@@ -155,6 +160,8 @@ export function registerIpc(): void {
     });
   });
   handle("api:desktopInfo", () => desktopInfo());
+  handle("api:listSounds", () => listSounds());
+  handle("api:fetchSound", (_e, id) => fetchSound(asString(id, "soundId", 200)));
 
   // --- captura
   handle("capture:list", () => listCaptureSources());
@@ -208,6 +215,17 @@ export function registerIpc(): void {
   on("room:notify", (_e, title, body) => {
     notify(asString(title, "title", 200), asString(body, "body", 500));
   });
+
+  // --- gravação
+  handle("recording:open", (event, label, ext) =>
+    openRecording(event.sender, asString(label, "label", 200), ext === "webm" ? "webm" : "mp4"),
+  );
+  on("recording:write", (_e, id, bytes) => {
+    if (!(bytes instanceof Uint8Array)) throw new TypeError("bytes: esperado Uint8Array");
+    writeRecording(asString(id, "id", 64), bytes);
+  });
+  handle("recording:close", (_e, id) => closeRecording(asString(id, "id", 64)));
+  on("recording:reveal", (_e, file) => revealRecording(typeof file === "string" ? file.slice(0, 1024) : null));
 
   // --- atualização
   handle("updates:status", () => updateStatus());

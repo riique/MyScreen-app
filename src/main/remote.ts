@@ -16,10 +16,11 @@ import {
 } from "electron";
 import type { RemoteCapabilities, RemoteSessionEvent } from "../shared/ipc";
 import type { Rect } from "../shared/remote/geometry";
-import { parseCtl, randomId, type Ctl } from "../shared/remote/protocol";
+import { MAX_CLIP_FILES, MAX_CLIP_FILES_BYTES, isId, parseCtl, randomId, type Ctl } from "../shared/remote/protocol";
 import { nativeModulePath } from "./audio";
 import { appImage } from "./icons";
 import { HELPER_FLAG, PARENT_FLAG } from "./inputHelper";
+import { readRichClipboard, writeClipboardFiles, writeClipboardImage } from "./remoteClipboard";
 import { RemoteGate, type HostShare, type InjectCommand, type SessionInfo } from "./remoteGate";
 import { asBoolean, asObject, asString, assertAppSender } from "./security";
 import { getSettings } from "./settings";
@@ -422,6 +423,41 @@ export function registerRemote(): void {
   ipcMain.handle("remote:readClipboard", (event) => {
     assertAppSender(event);
     return clipboard.readText();
+  });
+
+  ipcMain.handle("remote:readClipboardRich", (event, lastKey) => {
+    assertAppSender(event);
+    return readRichClipboard(typeof lastKey === "string" ? lastKey.slice(0, 64) : null);
+  });
+
+  // Lado controlado: imagem/arquivos que quem controla copiou. Só entram da
+  // sessão ativa, sem pausa; a resposta volta a quem controla pelo rc.ctl.
+  on("remote:deliverClip", (_e, peer, raw) => {
+    const from = asPeer(peer);
+    const v = asObject(raw, "clip");
+    const sessionId = v.sessionId;
+    const clipId = v.clipId;
+    if (!isId(sessionId) || !isId(clipId)) return;
+    const kind = v.kind === "image" ? "image" : v.kind === "files" ? "files" : null;
+    const files = Array.isArray(v.files) ? v.files : [];
+    if (!kind || files.length === 0 || files.length > MAX_CLIP_FILES) return gate.clipResult(sessionId, clipId, false);
+    let total = 0;
+    const parsed: { name: string; bytes: Uint8Array }[] = [];
+    for (const f of files) {
+      const o = asObject(f, "file");
+      if (!(o.bytes instanceof Uint8Array)) return gate.clipResult(sessionId, clipId, false);
+      total += o.bytes.byteLength;
+      parsed.push({ name: asString(o.name ?? "", "name", 260), bytes: o.bytes });
+    }
+    if (total > MAX_CLIP_FILES_BYTES || !gate.acceptsClip(from, sessionId)) return gate.clipResult(sessionId, clipId, false);
+    const write = kind === "image" ? writeClipboardImage(parsed[0].bytes) : writeClipboardFiles(parsed);
+    void write.then(
+      () => gate.clipResult(sessionId, clipId, true),
+      (error: unknown) => {
+        console.warn("Área de transferência remota não gravou:", error);
+        gate.clipResult(sessionId, clipId, false);
+      },
+    );
   });
 
   // Hook de teclado de quem controla: ligado enquanto a tela remota está focada.

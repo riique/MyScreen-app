@@ -40,7 +40,7 @@ try {
   await page.screenshot({ path: path.join(out, "home.png") });
 
   const bridge = await page.evaluate(() => Object.keys(window.myscreen ?? {}).sort().join(","));
-  check(bridge === "api,app,audio,capture,remote,room,settings,updates", `ponte window.myscreen (${bridge})`);
+  check(bridge === "api,app,audio,capture,recording,remote,room,settings,updates", `ponte window.myscreen (${bridge})`);
   check(await page.evaluate(() => typeof (window).require === "undefined" && typeof (window).process === "undefined"), "renderer sem Node");
 
   const sources = await page.evaluate(() => window.myscreen.capture.list());

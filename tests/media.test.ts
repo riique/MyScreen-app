@@ -9,11 +9,11 @@ import {
 } from "@shared/media";
 
 describe("screenBitrate", () => {
-  it("segue o orçamento do site", () => {
-    expect(screenBitrate("720p", 30)).toBe(3_500_000);
-    expect(screenBitrate("1080p", 60)).toBe(9_000_000);
-    expect(screenBitrate("1440p", 30)).toBe(9_000_000);
-    expect(screenBitrate("1440p", 60)).toBe(13_500_000);
+  it("segue o orçamento por resolução, +50% a 60 FPS", () => {
+    expect(screenBitrate("720p", 30)).toBe(5_000_000);
+    expect(screenBitrate("1080p", 60)).toBe(12_000_000);
+    expect(screenBitrate("1440p", 30)).toBe(12_000_000);
+    expect(screenBitrate("1440p", 60)).toBe(18_000_000);
   });
 });
 

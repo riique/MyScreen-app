@@ -1,7 +1,13 @@
 import { useEffect, useRef } from "react";
 import { contentRect, toNormalized } from "@shared/remote/geometry";
 import { scancodeFor } from "@shared/remote/keymap";
+import type { RichClipboard } from "@shared/ipc";
 import { WheelAccumulator, clipChunks, type InputEvent } from "@shared/remote/protocol";
+
+/** Ler arquivos grandes do disco leva um tempo; mais que isso, desiste desta vez. */
+const CLIP_READ_TIMEOUT_MS = 3000;
+/** Quanto tempo o input espera a imagem/arquivos chegarem do outro lado. */
+const CLIP_HOLD_MS = 8000;
 
 /**
  * Camada transparente sobre o vídeo da tela controlada. Mouse sempre; teclado
@@ -12,14 +18,24 @@ import { WheelAccumulator, clipChunks, type InputEvent } from "@shared/remote/pr
  * resolução pode mudar no meio). Clique na tarja preta não sai.
  *
  * Área de transferência: ao focar a tela remota (voltando de copiar algo
- * aqui), o texto copiado vai para o PC controlado, se mudou desde o último
- * envio. Até ele sair, os eventos esperam: um Ctrl+V logo em seguida cola o
- * texto novo, não o antigo.
+ * aqui), o que foi copiado — texto, imagem ou arquivos — vai para o PC
+ * controlado, se mudou desde o último envio. Até ele chegar lá, os eventos
+ * esperam: um Ctrl+V logo em seguida cola o conteúdo novo, não o antigo.
  */
-export function ControlOverlay({ send, label }: { send: (ev: InputEvent) => void; label: string }) {
+export function ControlOverlay({
+  send,
+  sendClip,
+  label,
+}: {
+  send: (ev: InputEvent) => void;
+  sendClip: (clip: RichClipboard) => Promise<void>;
+  label: string;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const sendRef = useRef(send);
   sendRef.current = send;
+  const sendClipRef = useRef(sendClip);
+  sendClipRef.current = sendClip;
 
   useEffect(() => {
     const el = ref.current;
@@ -30,8 +46,8 @@ export function ControlOverlay({ send, label }: { send: (ev: InputEvent) => void
       if (syncing) held.push(ev);
       else sendRef.current(ev);
     };
-    /** Último texto mandado: não reenvia nem pisa no que foi copiado lá. */
-    let lastClip: string | null = null;
+    /** Chave do último conteúdo mandado: não reenvia nem pisa no que foi copiado lá. */
+    let lastKey: string | null = null;
     let disposed = false;
     const buttons = new Set<number>();
     const keys = new Set<string>();
@@ -138,16 +154,22 @@ export function ControlOverlay({ send, label }: { send: (ev: InputEvent) => void
       if (syncing) return;
       syncing = true;
       try {
-        const text = await Promise.race([
-          remote.readClipboard(),
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 500)),
+        const clip = await Promise.race([
+          remote.readClipboardRich(lastKey),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), CLIP_READ_TIMEOUT_MS)),
         ]);
-        if (!disposed && text && text !== lastClip) {
-          const chunks = clipChunks(text);
-          if (chunks) {
-            for (const chunk of chunks) sendRef.current(chunk);
-            lastClip = text;
-          }
+        if (disposed || !clip || clip.kind === "same" || clip.kind === "empty") return;
+        lastKey = clip.key;
+        if (clip.kind === "text") {
+          const chunks = clipChunks(clip.text);
+          if (chunks) for (const chunk of chunks) sendRef.current(chunk);
+        } else {
+          // Imagem e arquivos vão por fora e podem demorar: os eventos esperam a
+          // confirmação, mas não para sempre — a tela não pode parecer travada.
+          await Promise.race([
+            sendClipRef.current(clip),
+            new Promise<void>((resolve) => setTimeout(resolve, CLIP_HOLD_MS)),
+          ]);
         }
       } catch (error) {
         console.warn("Área de transferência indisponível:", error);

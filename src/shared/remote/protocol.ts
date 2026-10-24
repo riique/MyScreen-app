@@ -14,6 +14,17 @@
 export const RC_VERSION = 1;
 export const TOPIC_CTL = "myscreen.rc.ctl";
 export const TOPIC_IN = "myscreen.rc.in";
+/**
+ * Imagem ou arquivos copiados em quem controla, para colar no PC controlado.
+ * Vai por byte stream (um por arquivo), só para o controlado, com atributos
+ * `CLIP_ATTR`. O texto continua no `rc.in` (pacote CLIP), que é ordenado com
+ * as teclas.
+ */
+export const TOPIC_CLIP = "myscreen.rc.clip";
+export const CLIP_ATTR = { session: "rc.session", clip: "rc.clip", kind: "rc.kind", index: "rc.index", count: "rc.count" } as const;
+/** Teto somado de uma área de transferência de imagem/arquivos. */
+export const MAX_CLIP_FILES_BYTES = 100 * 1024 * 1024;
+export const MAX_CLIP_FILES = 50;
 
 /** Atributos de participante que anunciam quem pode ser controlado. */
 export const ATTR_VERSION = "rc.v";
@@ -39,6 +50,8 @@ export type Ctl =
   | { t: "state"; sessionId: string; paused: boolean; why?: PauseWhy }
   /** Um clique caiu numa janela do MyScreen escondida da transmissão e não entrou. */
   | { t: "blocked"; sessionId: string }
+  /** O PC controlado pôs (ok) ou não a imagem/arquivos na área de transferência. */
+  | { t: "clip"; sessionId: string; clipId: string; ok: boolean }
   | { t: "ping"; sessionId: string; n: number }
   | { t: "pong"; sessionId: string; n: number };
 
@@ -119,6 +132,10 @@ export function parseCtl(input: Uint8Array | unknown): Ctl | null {
     }
     case "blocked":
       return isId(m.sessionId) ? { t: "blocked", sessionId: m.sessionId } : null;
+    case "clip":
+      return isId(m.sessionId) && isId(m.clipId) && typeof m.ok === "boolean"
+        ? { t: "clip", sessionId: m.sessionId, clipId: m.clipId, ok: m.ok }
+        : null;
     case "ping":
     case "pong":
       return isId(m.sessionId) && isUint(m.n, 0xffff_ffff) ? { t: m.t, sessionId: m.sessionId, n: m.n } : null;

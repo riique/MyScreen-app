@@ -306,3 +306,24 @@ describe("área de transferência", () => {
     expect(t.clipboard).toEqual([]);
   });
 });
+
+describe("imagem e arquivos na área de transferência", () => {
+  const CLIP = "ICEiIyQlJicoKSorLC0uLw";
+  it("só aceitam de quem controla, na sessão ativa e sem pausa", () => {
+    expect(t.gate.acceptsClip(ana, SESSION)).toBe(false);
+    t.grant();
+    expect(t.gate.acceptsClip(ana, SESSION)).toBe(true);
+    expect(t.gate.acceptsClip({ ...ana, sid: "PA_outro" }, SESSION)).toBe(false);
+    expect(t.gate.acceptsClip(ana, REQ)).toBe(false);
+    t.gate.setPaused(true);
+    expect(t.gate.acceptsClip(ana, SESSION)).toBe(false);
+  });
+  it("a resposta vai para quem controla, e só na mesma sessão", () => {
+    t.grant();
+    t.gate.clipResult(SESSION, CLIP, true);
+    expect(t.sent.at(-1)).toEqual({ to: ana.identity, msg: { t: "clip", sessionId: SESSION, clipId: CLIP, ok: true } });
+    const before = t.sent.length;
+    t.gate.clipResult(REQ, CLIP, true);
+    expect(t.sent).toHaveLength(before);
+  });
+});

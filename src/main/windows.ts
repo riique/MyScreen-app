@@ -118,6 +118,22 @@ export function openExternalSafely(url: string): void {
   if (isAllowedExternal(url)) void shell.openExternal(url);
 }
 
+/**
+ * Link que alguém mandou no chat e a pessoa clicou: só http(s), sem usuário e
+ * senha embutidos, sempre no navegador padrão — nunca dentro do app.
+ */
+export function openChatLink(raw: string): void {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return;
+  if (url.username || url.password) return;
+  void shell.openExternal(url.href);
+}
+
 function popoutMenu(win: BrowserWindow): Menu {
   const displays = screen.getAllDisplays();
   return Menu.buildFromTemplate([

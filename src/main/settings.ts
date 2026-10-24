@@ -23,6 +23,7 @@ const DEFAULTS: AppSettings = {
   nickname: "",
   autoDownloadUpdates: true,
   remoteControlDisabled: false,
+  soundboardEnabled: false,
   media: DEFAULT_MEDIA_PREFS,
 };
 
@@ -40,6 +41,7 @@ function parse(raw: unknown): AppSettings {
   if (typeof v.shortcutsEnabled === "boolean") out.shortcutsEnabled = v.shortcutsEnabled;
   if (typeof v.autoDownloadUpdates === "boolean") out.autoDownloadUpdates = v.autoDownloadUpdates;
   if (typeof v.remoteControlDisabled === "boolean") out.remoteControlDisabled = v.remoteControlDisabled;
+  if (typeof v.soundboardEnabled === "boolean") out.soundboardEnabled = v.soundboardEnabled;
   if (typeof v.nickname === "string") out.nickname = v.nickname.trim().slice(0, 64);
   out.media = parseMediaPrefs(v.media);
   return out;

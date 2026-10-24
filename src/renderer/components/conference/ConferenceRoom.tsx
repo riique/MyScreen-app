@@ -37,7 +37,14 @@ import {
 } from "livekit-client";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AudioCapabilities, CaptureSource, SystemAudioMode } from "@shared/ipc";
-import { DEFAULT_MEDIA_PREFS, RESOLUTION, SCREEN_BITRATE, screenBitrate, type MediaPrefs } from "@shared/media";
+import {
+  CAMERA_BITRATE,
+  DEFAULT_MEDIA_PREFS,
+  RESOLUTION,
+  SCREEN_BITRATE,
+  screenBitrate,
+  type MediaPrefs,
+} from "@shared/media";
 import { ATTR_VERSION, RC_VERSION } from "@shared/remote/protocol";
 import { ChatSidebar } from "./ChatSidebar";
 import { MediaControls } from "./MediaControls";
@@ -52,6 +59,11 @@ import { ControlToolbar } from "./remote/ControlToolbar";
 import { PANIC_SHORTCUT_LABEL } from "./remote/labels";
 import { useRemoteControlHost, type HostShare } from "./remote/useRemoteControlHost";
 import { useRemoteControlViewer, type RemoteViewer } from "./remote/useRemoteControlViewer";
+import { formatElapsed } from "@shared/recording";
+import { RecordDialog, useNow, type RecordOption } from "./recording/RecordDialog";
+import { SoundboardControl } from "./soundboard/SoundboardControl";
+import { useSoundboard } from "./soundboard/useSoundboard";
+import { useRecording } from "./recording/useRecording";
 import { readScreenVolume, screenVolumeKey, writeMediaPrefs, writeScreenVolume } from "@/lib/storage";
 import {
   readCapture,
@@ -192,13 +204,18 @@ export function ConferenceRoom({
           ...(mediaPrefs.audioOutputId ? { audioOutput: { deviceId: mediaPrefs.audioOutputId } } : {}),
           videoCaptureDefaults: { resolution: VideoPresets.h1080.resolution },
           publishDefaults: {
-            videoEncoding: { maxBitrate: 3_000_000, maxFramerate: 30, priority: "high" },
+            videoEncoding: { maxBitrate: CAMERA_BITRATE, maxFramerate: 30, priority: "high" },
+            // Camadas da câmera em 1080p, 720p e 360p: com a rede apertada, quem
+            // assiste desce um degrau em vez de ficar sem quadro.
+            videoSimulcastLayers: [VideoPresets.h360, VideoPresets.h720],
             screenShareEncoding: {
               maxBitrate: SCREEN_BITRATE["1080p"],
               maxFramerate: 30,
               priority: "high",
             },
-            degradationPreference: "maintain-resolution",
+            // Sem `degradationPreference` aqui: o padrão do SDK é
+            // `maintain-framerate` na câmera (sob aperto ela perde nitidez, não
+            // congela) e a tela recebe a sua em `startScreenShare`.
           },
         }}
         className="flex min-h-0 flex-1 flex-col"
@@ -321,8 +338,12 @@ function ConferenceStage({
   // O que está no ar (só tela inteira pode ser controlada).
   const [hostShare, setHostShare] = useState<HostShare | null>(null);
   const [remoteDisabled, setRemoteDisabled] = useState(false);
+  const [soundboardEnabled, setSoundboardEnabled] = useState(false);
   useEffect(() => {
-    void window.myscreen.settings.get().then((s) => setRemoteDisabled(s.remoteControlDisabled));
+    void window.myscreen.settings.get().then((s) => {
+      setRemoteDisabled(s.remoteControlDisabled);
+      setSoundboardEnabled(s.soundboardEnabled);
+    });
   }, []);
   const remoteHost = useRemoteControlHost({
     room,
@@ -332,6 +353,17 @@ function ConferenceStage({
     sendChat: chat.send,
   });
   const remoteViewer = useRemoteControlViewer(room);
+
+  /* --- Gravação ------------------------------------------------------------ */
+  const recording = useRecording({
+    room,
+    myName: localParticipant.name || localParticipant.identity || "Alguém",
+    sendChat: chat.send,
+  });
+  const [isRecordOpen, setIsRecordOpen] = useState(false);
+
+  /* --- Áudios do servidor (o botão só aparece para quem ligou; o som, todos ouvem) */
+  const soundboard = useSoundboard(room);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
@@ -909,7 +941,37 @@ function ConferenceStage({
     });
   }, []);
 
-  const participantCount = useParticipants().length;
+  const participants = useParticipants();
+  const participantCount = participants.length;
+
+  // Cada câmera e cada tela publicada na sala, de qualquer pessoa.
+  const recordOptions: RecordOption[] = participants.flatMap((p) => {
+    const person = p.name || p.identity || (p.isLocal ? "Você" : "Participante");
+    const out: RecordOption[] = [];
+    const cam = p.getTrackPublication(Track.Source.Camera);
+    if (cam) {
+      out.push({
+        identity: p.identity,
+        source: Track.Source.Camera,
+        label: `Câmera de ${person}`,
+        person,
+        isLocal: p.isLocal,
+        live: !cam.isMuted && Boolean(cam.track),
+      });
+    }
+    const screen = p.getTrackPublication(Track.Source.ScreenShare);
+    if (screen) {
+      out.push({
+        identity: p.identity,
+        source: Track.Source.ScreenShare,
+        label: `Tela de ${person}`,
+        person,
+        isLocal: p.isLocal,
+        live: !screen.isMuted && Boolean(screen.track),
+      });
+    }
+    return out;
+  });
   const roomLabel = room.name || roomId;
 
   const reconnecting =
@@ -926,6 +988,7 @@ function ConferenceStage({
   const notices = [
     screenShareError ? { key: "screen", text: screenShareError, dismiss: () => setScreenShareError(null) } : null,
     controlError ? { key: "control", text: controlError, dismiss: () => setControlError(null) } : null,
+    recording.error ? { key: "record", text: recording.error, dismiss: recording.dismissError } : null,
     remoteViewer.notice ? { key: "remote", text: remoteViewer.notice, dismiss: remoteViewer.dismissNotice } : null,
     remoteViewer.state.phase === "requesting"
       ? {
@@ -944,6 +1007,7 @@ function ConferenceStage({
   ].filter((n): n is { key: string; text: string; dismiss: () => void } => n !== null);
 
   const closeShareDialog = useCallback(() => setIsShareDialogOpen(false), []);
+  const closeRecordDialog = useCallback(() => setIsRecordOpen(false), []);
 
   const updateAudioPrefs = useCallback((patch: Partial<SystemAudioPrefs>) => {
     setAudioPrefs((prev) => {
@@ -1000,6 +1064,13 @@ function ConferenceStage({
               onElevate={remoteHost.elevate}
               onPause={() => remoteHost.pause(!remoteHost.session?.paused)}
               onStop={remoteHost.stop}
+            />
+          ) : null}
+          {recording.recordings.length > 0 ? (
+            <RecordingPill
+              count={recording.recordings.length}
+              since={Math.min(...recording.recordings.map((r) => r.startedAt))}
+              onClick={() => setIsRecordOpen(true)}
             />
           ) : null}
           <CopyLinkButton url={platform.inviteUrl(roomId)} />
@@ -1148,21 +1219,26 @@ function ConferenceStage({
           onToggleMic={guard(toggleMic)}
           onToggleCam={guard(toggleCam)}
           onToggleScreenShare={() => (isScreenSharing ? void stopScreenShare() : setIsShareDialogOpen(true))}
+          recordingCount={recording.recordings.length}
+          onRecord={() => setIsRecordOpen(true)}
           onToggleFullscreen={() => toggleFullscreen(shellRef.current)}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onLeave={handleLeave}
           extra={
-            systemAudioActive ? (
-              <SystemAudioControl
-                prefs={audioPrefs}
-                paused={audioPaused}
-                onChange={updateAudioPrefs}
-                onPausedChange={(p) => {
-                  setAudioPaused(p);
-                  window.myscreen.audio.update({ paused: p });
-                }}
-              />
-            ) : null
+            <>
+              {soundboardEnabled ? <SoundboardControl board={soundboard} /> : null}
+              {systemAudioActive ? (
+                <SystemAudioControl
+                  prefs={audioPrefs}
+                  paused={audioPaused}
+                  onChange={updateAudioPrefs}
+                  onPausedChange={(p) => {
+                    setAudioPaused(p);
+                    window.myscreen.audio.update({ paused: p });
+                  }}
+                />
+              ) : null}
+            </>
           }
         />
       </footer>
@@ -1178,6 +1254,21 @@ function ConferenceStage({
       {remoteHost.consent ? (
         <ConsentDialog key={remoteHost.consent.reqId} request={remoteHost.consent} onDecide={remoteHost.decide} />
       ) : null}
+
+      <RecordDialog
+        open={isRecordOpen}
+        options={recordOptions}
+        recordings={recording.recordings}
+        lastFile={recording.lastFile}
+        onClose={closeRecordDialog}
+        onStart={(targets, audio) => {
+          recording.start(targets, audio);
+          setIsRecordOpen(false);
+        }}
+        onStop={(key) => void recording.stop(key)}
+        onStopAll={() => void recording.stopAll()}
+        onReveal={(file) => window.myscreen.recording.reveal(file)}
+      />
 
       <ShareDialog
         open={isShareDialogOpen}
@@ -1200,7 +1291,7 @@ function mediaFailure(error: unknown, what: "microfone" | "câmera"): string {
   if (name === "NotReadableError") return `A ${what === "câmera" ? "câmera" : "placa de som"} está em uso por outro aplicativo.`;
   if (name === "NotAllowedError")
     return `O Windows bloqueou o ${what === "câmera" ? "acesso à câmera" : "microfone"}. Libere em Configurações → Privacidade.`;
-  if (name === "NotFoundError") return `Nenhum${what === "câmera" ? "a câmera" : " microfone"} encontrado.`;
+  if (name === "NotFoundError") return what === "câmera" ? "Nenhuma câmera encontrada." : "Nenhum microfone encontrado.";
   return `Não foi possível usar ${what === "câmera" ? "a câmera" : "o microfone"} selecionado.`;
 }
 
@@ -1613,9 +1704,14 @@ function Tile({
 
       {controlling && rs.phase === "active" ? (
         <>
-          <ControlOverlay send={remote.send} label={`Tela de ${name}, controlada por você`} />
+          <ControlOverlay
+            send={remote.send}
+            sendClip={remote.sendClip}
+            label={`Tela de ${name}, controlada por você`}
+          />
           <ControlToolbar
             state={rs}
+            clip={remote.clipNotice}
             hidden={chromeHidden}
             onFullscreen={() => onToggleFullscreen(ref.current)}
             onStop={remote.stop}
@@ -2077,6 +2173,23 @@ function ControlledPill({
         Parar
       </button>
     </div>
+  );
+}
+
+/** Na barra da sala enquanto grava: quantos arquivos e há quanto tempo. */
+function RecordingPill({ count, since, onClick }: { count: number; since: number; onClick: () => void }) {
+  const now = useNow(true);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Gravações em andamento"
+      className="mr-1 flex h-9 items-center gap-2 border border-alert-line bg-alert-wash px-2.5 text-[0.8125rem] font-medium text-alert transition-colors hover:bg-alert-wash-2 [border-radius:var(--radius-cell)]"
+    >
+      <span aria-hidden className="size-2 shrink-0 animate-pulse rounded-full bg-[#d92d20]" />
+      <span>{count > 1 ? `Gravando ${count}` : "Gravando"}</span>
+      <span className="font-mono text-[0.75rem] [font-variant-numeric:tabular-nums]">{formatElapsed(now - since)}</span>
+    </button>
   );
 }
 

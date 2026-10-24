@@ -1,7 +1,21 @@
 import { RoomEvent, type RemoteParticipant, type Room } from "livekit-client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RemoteCapabilities, RemoteConsentRequest, RemoteSessionInfo } from "@shared/ipc";
-import { ATTR_BY, ATTR_DISPLAY, ATTR_VERSION, RC_VERSION, TOPIC_CTL, TOPIC_IN, encodeCtl, parseCtl, type Ctl } from "@shared/remote/protocol";
+import {
+  ATTR_BY,
+  ATTR_DISPLAY,
+  ATTR_VERSION,
+  CLIP_ATTR,
+  MAX_CLIP_FILES,
+  MAX_CLIP_FILES_BYTES,
+  RC_VERSION,
+  TOPIC_CLIP,
+  TOPIC_CTL,
+  TOPIC_IN,
+  encodeCtl,
+  parseCtl,
+  type Ctl,
+} from "@shared/remote/protocol";
 
 /**
  * Lado de quem é controlado, no renderer. Anuncia que o PC pode ser controlado
@@ -117,6 +131,80 @@ export function useRemoteControlHost({
         .off(RoomEvent.Reconnecting, onLost)
         .off(RoomEvent.Disconnected, onLost);
       bridge.roomLost();
+    };
+  }, [room, bridge]);
+
+  // --- Imagem/arquivos de quem controla: junta os pedaços e entrega ao main,
+  // que confere a sessão. Aqui só se limita o tamanho; quem decide é lá.
+  useEffect(() => {
+    type Pending = {
+      from: { identity: string; sid: string; name: string };
+      sessionId: string;
+      kind: "image" | "files";
+      count: number;
+      files: ({ name: string; bytes: Uint8Array } | undefined)[];
+      size: number;
+      timer: ReturnType<typeof setTimeout>;
+    };
+    const pending = new Map<string, Pending>();
+    room.registerByteStreamHandler(TOPIC_CLIP, (reader, info) => {
+      void (async () => {
+        const a = reader.info.attributes ?? {};
+        const clipId = a[CLIP_ATTR.clip];
+        const sessionId = a[CLIP_ATTR.session];
+        const kind = a[CLIP_ATTR.kind] === "image" ? "image" : a[CLIP_ATTR.kind] === "files" ? "files" : null;
+        const index = Number(a[CLIP_ATTR.index]);
+        const count = Number(a[CLIP_ATTR.count]);
+        const participant = room.remoteParticipants.get(info.identity);
+        if (!clipId || !sessionId || !kind || !participant) return;
+        if (!Number.isInteger(count) || count < 1 || count > MAX_CLIP_FILES) return;
+        if (!Number.isInteger(index) || index < 0 || index >= count) return;
+        let entry = pending.get(clipId);
+        if (!entry) {
+          entry = {
+            from: { identity: participant.identity, sid: participant.sid, name: participant.name || participant.identity },
+            sessionId,
+            kind,
+            count,
+            files: [],
+            size: 0,
+            timer: setTimeout(() => pending.delete(clipId), 180_000),
+          };
+          pending.set(clipId, entry);
+        }
+        if (entry.from.identity !== info.identity || entry.count !== count) return;
+        const chunks: Uint8Array[] = [];
+        for await (const chunk of reader) {
+          entry.size += chunk.byteLength;
+          if (entry.size > MAX_CLIP_FILES_BYTES) {
+            clearTimeout(entry.timer);
+            pending.delete(clipId);
+            return;
+          }
+          chunks.push(chunk);
+        }
+        const bytes = new Uint8Array(chunks.reduce((n, c) => n + c.byteLength, 0));
+        let at = 0;
+        for (const c of chunks) {
+          bytes.set(c, at);
+          at += c.byteLength;
+        }
+        entry.files[index] = { name: reader.info.name || "arquivo", bytes };
+        if (entry.files.filter(Boolean).length < entry.count) return;
+        clearTimeout(entry.timer);
+        pending.delete(clipId);
+        bridge.deliverClip(entry.from, {
+          sessionId: entry.sessionId,
+          clipId,
+          kind: entry.kind,
+          files: entry.files as { name: string; bytes: Uint8Array }[],
+        });
+      })().catch((error: unknown) => console.warn("Área de transferência remota falhou:", error));
+    });
+    return () => {
+      room.unregisterByteStreamHandler(TOPIC_CLIP);
+      for (const p of pending.values()) clearTimeout(p.timer);
+      pending.clear();
     };
   }, [room, bridge]);
 

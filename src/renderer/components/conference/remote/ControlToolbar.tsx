@@ -1,7 +1,7 @@
 import { Keyboard, Maximize2, MousePointer2, Send, X } from "lucide-react";
 import { useState } from "react";
 import { MAX_TEXT_BYTES, type InputEvent } from "@shared/remote/protocol";
-import type { ViewerState } from "./useRemoteControlViewer";
+import type { ClipNotice, ViewerState } from "./useRemoteControlViewer";
 
 /**
  * Barra fina no topo do quadro controlado: de quem é a tela, a latência
@@ -9,12 +9,14 @@ import type { ViewerState } from "./useRemoteControlViewer";
  */
 export function ControlToolbar({
   state,
+  clip,
   hidden,
   onFullscreen,
   onStop,
   send,
 }: {
   state: Extract<ViewerState, { phase: "active" }>;
+  clip: ClipNotice | null;
   hidden: boolean;
   onFullscreen: () => void;
   onStop: () => void;
@@ -75,6 +77,16 @@ export function ControlToolbar({
       {pausedText ? (
         <p role="status" className="rounded-md bg-[#b54708]/90 px-2.5 py-1 text-[0.75rem] font-medium text-white">
           {pausedText}
+        </p>
+      ) : null}
+      {clip ? (
+        <p
+          role="status"
+          className={`rounded-md px-2.5 py-1 text-[0.75rem] font-medium text-white ${
+            clip.tone === "error" ? "bg-[#b42318]/90" : clip.tone === "ok" ? "bg-[#067647]/90" : "bg-black/75"
+          }`}
+        >
+          {clip.text}
         </p>
       ) : null}
       {textOpen ? <SendText send={send} onClose={() => setTextOpen(false)} /> : null}

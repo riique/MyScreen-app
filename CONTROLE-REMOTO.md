@@ -626,6 +626,14 @@ Saída: notas com o que foi medido, ajustes neste documento.
   e os demais eventos esperam ele sair, para um Ctrl+V logo depois colar o texto novo. O portão
   junta os pedaços e chama `clipboard.writeText` no main antes da tecla seguinte; pausado, descarta.
   Falta o sentido contrário ("Copiar do remoto").
+- Imagem e arquivos copiados em quem controla: **feito** (1.4.0). Vão por byte stream
+  (`myscreen.rc.clip`, um stream por arquivo, só para o controlado, até 50 arquivos / 100 MB),
+  com a sessão e o id da transferência nos atributos. O renderer controlado junta e entrega ao
+  main, que confere sessão, identidade, SID e pausa (`RemoteGate.acceptsClip`); a imagem vira PNG
+  na área de transferência, e os arquivos vão para `%TEMP%\MyScreen\Recebidos\…` e entram como
+  lista de arquivos (CF_HDROP, via `Set-Clipboard -LiteralPath`). A resposta volta em
+  `rc.ctl {t:"clip", ok}`; enquanto ela não chega (até 8 s), o input de quem controla espera,
+  para o Ctrl+V colar o conteúdo novo. Pastas não vão.
 - Pedir "trocar para o monitor 2" (o controlado confirma; troca de fonte = sessão nova).
 
 ### Fase 4 — Nível AnyDesk (decisão separada, muda o produto)
@@ -633,7 +641,7 @@ Saída: notas com o que foi medido, ajustes neste documento.
 - Serviço do Windows como SYSTEM (instalador com administrador) para UAC, tela de bloqueio e
   `Ctrl+Alt+Del` (`SendSAS`). Isso exige instalador por máquina, assinatura de código e muda o
   modelo de segurança — não entra sem uma decisão explícita.
-- Transferência de arquivos (data streams do LiveKit, `sendFile`).
+- Transferência de arquivos fora da área de transferência (arrastar para a tela remota).
 - E2EE.
 
 ---
