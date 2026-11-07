@@ -25,6 +25,7 @@ export type Native = {
   startMouseWatch(onLocal: () => void): void;
   stopMouseWatch(): void;
   runElevated(exe: string, args: string, hwnd: number): Promise<boolean>;
+  uacServicePath?(): string | null;
   connectParentPipe(path: string, serverPid: number, onLine: (line: string) => void): void;
 };
 

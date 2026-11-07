@@ -15,7 +15,14 @@ mesmo servidor Ubuntu. O que ele faz que o navegador não faz:
   sala pede para controlar o mouse e o teclado de quem compartilha a tela inteira pelo app; só
   vale depois do clique em "Permitir". "Fulano está controlando · Pausar · Parar" na sala, linha
   no chat, `Ctrl+Alt+Shift+S` para parar na hora, e a sessão cai sozinha se a tela parar, alguém sair/reconectar ou o PC
-  bloquear.
+  bloquear. Texto, **imagem e arquivos** copiados em quem controla colam com Ctrl+V no PC controlado.
+- **Gravação** (botão **Gravar** na doca): escolha quais câmeras e telas da sala gravar, de qualquer
+  pessoa. Cada fonte vira um arquivo MP4 separado (H.264 + AAC) em `Vídeos\MyScreen`, com o som da
+  chamada inteira ou só de quem é gravado. Câmera desligada ou tela parada no meio viram um quadro
+  de aviso no mesmo arquivo; a sala é avisada no chat quando alguém começa e para de gravar.
+- **Chat completo**: links clicáveis (abrem no navegador), **negrito**, *itálico*, `código`,
+  blocos de código, emojis, Shift+Enter para quebrar linha, e imagens, vídeos e arquivos (até
+  25 MB cada) por colar (Ctrl+V), arrastar para o painel ou pelo clipe. Imagem abre ampliada.
 
 ### Controle remoto
 
@@ -30,8 +37,12 @@ ControlOverlay → rc.in (data channel) → renderer → IPC → main: RemoteGat
 - Só tela inteira (não janela). O navegador pode ser controlado? Não — só o app de Windows.
 - Janelas de administrador (UIPI): a pessoa controlada clica em **Liberar** na sala (avisada por notificação) e
   aceita o UAC; um auxiliar elevado passa a injetar o input até o app fechar.
-- Limitações do Windows: UAC, tela de bloqueio e `Ctrl+Alt+Del` ficam fora do alcance; o layout de teclado que vale é o do PC controlado ("Enviar texto" para
-  layouts diferentes).
+- **Responder ao UAC**: com o serviço opcional instalado no PC controlado, quem controla pode clicar
+  no escudo **Solicitar acesso administrativo**. A pessoa no PC confirma a autorização para aquela
+  sessão. Os avisos de consentimento seguintes aparecem em vídeo privado e aceitam clique remoto.
+  [Instalação, escopo e teste manual](CONTROLE-REMOTO.md#acesso-administrativo-uac).
+- A tela de bloqueio e `Ctrl+Alt+Del` ficam sob controle local. O layout de teclado que vale é o do
+  PC controlado ("Enviar texto" para layouts diferentes).
 - O servidor precisa emitir tokens com `canUpdateOwnMetadata` e `identityProof` (site ≥ commit do
   controle remoto). Com servidor antigo o recurso simplesmente não aparece.
 - Configurações → **Nunca aceitar pedidos de controle** desliga o anúncio.

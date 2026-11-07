@@ -170,6 +170,7 @@ dependencies = [
  "napi-derive",
  "sysinfo",
  "wasapi",
+ "windows",
  "windows-sys",
 ]
 

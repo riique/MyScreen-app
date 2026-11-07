@@ -6,7 +6,7 @@ import { setServerUrlCache } from "@/platform";
 
 /**
  * Configurações do app: servidor (para quem hospeda o próprio MyScreen), tema,
- * atalhos globais e atualizações. Fica na home: trocar de servidor no meio de uma sala não
+ * atalhos globais, áudios da chamada e atualizações. Fica na home: trocar de servidor no meio de uma sala não
  * faz sentido.
  */
 export function AppSettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -57,6 +57,11 @@ export function AppSettingsDialog({ open, onClose }: { open: boolean; onClose: (
 
   async function toggleRemoteDisabled(on: boolean) {
     const r = await window.myscreen.settings.set({ remoteControlDisabled: on });
+    if (r.ok) setSettings(r.data);
+  }
+
+  async function toggleSoundboard(on: boolean) {
+    const r = await window.myscreen.settings.set({ soundboardEnabled: on });
     if (r.ok) setSettings(r.data);
   }
 
@@ -169,6 +174,18 @@ export function AppSettingsDialog({ open, onClose }: { open: boolean; onClose: (
               onChange={(v) => void toggleRemoteDisabled(v)}
               label="Nunca aceitar pedidos de controle"
               note="Com a tela inteira no ar, quem está na sala pode pedir para controlar o seu mouse e teclado — só com o seu clique em “Permitir”. Ligado, ninguém nem vê a opção de pedir. Durante um controle, Ctrl+Alt+Shift+S encerra na hora."
+            />
+          </div>
+
+          <div>
+            <h3 className="border-b border-rule pb-2 text-[0.875rem] font-semibold text-ink">Áudios na chamada</h3>
+            <CheckCell
+              name="set-soundboard"
+              checked={settings?.soundboardEnabled ?? false}
+              disabled={!settings}
+              onChange={(v) => void toggleSoundboard(v)}
+              label="Mostrar o botão de áudios na sala"
+              note="Dentro da sala aparece um botão com os áudios do servidor. O que você tocar, todo mundo na chamada escuta — tenha ou não o botão ligado."
             />
           </div>
 

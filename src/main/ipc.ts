@@ -3,9 +3,11 @@ import type { SharingState, SystemAudioMode, ThemePreference } from "../shared/i
 import { audioCapabilities, startAudio, stopAudio, updateAudio } from "./audio";
 import { listCaptureSources, selectCaptureSource } from "./capture";
 import { consumePendingRoom, notify, refreshShortcuts, setRoomState } from "./integration";
+import { closeRecording, openRecording, revealRecording, writeRecording } from "./recording";
 import { registerRemote, stopRemoteControl } from "./remote";
 import {
   asBoolean,
+  asBytes,
   asNumber,
   asObject,
   asOptionalString,
@@ -14,11 +16,24 @@ import {
   isAppUrl,
   normalizeServerUrl,
 } from "./security";
-import { createRoom, desktopInfo, getRoom, token } from "./server";
+import {
+  chatAppend,
+  chatDelete,
+  chatFile,
+  chatHistory,
+  chatUploadFile,
+  createRoom,
+  desktopInfo,
+  fetchSound,
+  getRoom,
+  listSounds,
+  token,
+  uploadSound,
+} from "./server";
 import { getSettings, updateSettings } from "./settings";
 import { parseMediaPrefs } from "../shared/media";
 import { applyAutoDownload, checkForUpdates, configureFeed, downloadUpdate, installUpdate, updateStatus } from "./updater";
-import { applyTheme, getMainWindow, openExternalSafely, setSharing } from "./windows";
+import { applyTheme, getMainWindow, openChatLink, openExternalSafely, setSharing } from "./windows";
 import { normalizeRoomId } from "../shared/room";
 
 // ---------------------------------------------------------------- permissões
@@ -97,6 +112,7 @@ export function registerIpc(): void {
     openExternalSafely(kind === "microphone" ? "ms-settings:privacy-microphone" : "ms-settings:privacy-webcam");
   });
   on("app:openExternal", (_e, url) => openExternalSafely(asString(url, "url", 2048)));
+  on("app:openLink", (_e, url) => openChatLink(asString(url, "url", 4096)));
 
   // --- configurações
   handle("settings:get", () => getSettings());
@@ -123,6 +139,9 @@ export function registerIpc(): void {
     }
     if (patch.remoteControlDisabled !== undefined) {
       next.remoteControlDisabled = asBoolean(patch.remoteControlDisabled, "remoteControlDisabled");
+    }
+    if (patch.soundboardEnabled !== undefined) {
+      next.soundboardEnabled = asBoolean(patch.soundboardEnabled, "soundboardEnabled");
     }
     // Patch parcial: mescla com o que já está salvo.
     if (patch.media !== undefined) next.media = parseMediaPrefs(patch.media, getSettings().media);
@@ -155,6 +174,39 @@ export function registerIpc(): void {
     });
   });
   handle("api:desktopInfo", () => desktopInfo());
+  handle("api:listSounds", () => listSounds());
+  handle("api:fetchSound", (_e, id) => fetchSound(asString(id, "soundId", 200)));
+  handle("api:uploadSound", (_e, roomToken, name, bytes) =>
+    uploadSound(asString(roomToken, "roomToken", 4096), asString(name, "name", 260), asBytes(bytes, "bytes", 25 * 1024 * 1024)),
+  );
+  handle("api:chatHistory", (_e, roomId, roomToken) => chatHistory(parseRoomId(roomId), asString(roomToken, "roomToken", 4096)));
+  handle("api:chatUploadFile", (_e, roomId, roomToken, raw) => {
+    const f = asObject(raw, "file");
+    return chatUploadFile(parseRoomId(roomId), asString(roomToken, "roomToken", 4096), {
+      name: asString(f.name, "name", 260),
+      type: typeof f.type === "string" ? f.type.slice(0, 100) : "",
+      bytes: asBytes(f.bytes, "bytes", 25 * 1024 * 1024),
+    });
+  });
+  handle("api:chatAppend", (_e, roomId, roomToken, raw) => {
+    const m = asObject(raw, "message");
+    const attributes: Record<string, string> = {};
+    const rawAttrs = typeof m.attributes === "object" && m.attributes !== null ? (m.attributes as Record<string, unknown>) : {};
+    for (const [k, v] of Object.entries(rawAttrs).slice(0, 10)) if (typeof v === "string") attributes[k.slice(0, 64)] = v.slice(0, 256);
+    return chatAppend(parseRoomId(roomId), asString(roomToken, "roomToken", 4096), {
+      id: asString(m.id, "id", 128),
+      timestamp: asNumber(m.timestamp, "timestamp", 0, Number.MAX_SAFE_INTEGER),
+      message: typeof m.message === "string" ? m.message.slice(0, 20_000) : "",
+      attributes,
+      fileIds: Array.isArray(m.fileIds) ? m.fileIds.slice(0, 10).map((f) => asString(f, "fileId", 64)) : [],
+    });
+  });
+  handle("api:chatDelete", (_e, roomId, roomToken, messageId) =>
+    chatDelete(parseRoomId(roomId), asString(roomToken, "roomToken", 4096), asString(messageId, "messageId", 128)),
+  );
+  handle("api:chatFile", (_e, roomId, roomToken, fileId) =>
+    chatFile(parseRoomId(roomId), asString(roomToken, "roomToken", 4096), asString(fileId, "fileId", 64)),
+  );
 
   // --- captura
   handle("capture:list", () => listCaptureSources());
@@ -208,6 +260,17 @@ export function registerIpc(): void {
   on("room:notify", (_e, title, body) => {
     notify(asString(title, "title", 200), asString(body, "body", 500));
   });
+
+  // --- gravação
+  handle("recording:open", (event, label, ext) =>
+    openRecording(event.sender, asString(label, "label", 200), ext === "webm" ? "webm" : "mp4"),
+  );
+  on("recording:write", (_e, id, bytes) => {
+    if (!(bytes instanceof Uint8Array)) throw new TypeError("bytes: esperado Uint8Array");
+    writeRecording(asString(id, "id", 64), bytes);
+  });
+  handle("recording:close", (_e, id) => closeRecording(asString(id, "id", 64)));
+  on("recording:reveal", (_e, file) => revealRecording(typeof file === "string" ? file.slice(0, 1024) : null));
 
   // --- atualização
   handle("updates:status", () => updateStatus());

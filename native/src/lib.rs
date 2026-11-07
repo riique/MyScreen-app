@@ -397,6 +397,28 @@ pub fn run_elevated(exe: String, args: String, hwnd: i64) -> AsyncTask<ElevateTa
     AsyncTask::new(ElevateTask { exe, args, hwnd })
 }
 
+#[cfg(windows)]
+#[napi]
+pub fn uac_service_path() -> Option<String> {
+    use windows_sys::Win32::{
+        System::Com::CoTaskMemFree,
+        UI::Shell::{SHGetKnownFolderPath, FOLDERID_ProgramFilesX64},
+    };
+    unsafe {
+        let mut raw = std::ptr::null_mut();
+        if SHGetKnownFolderPath(&FOLDERID_ProgramFilesX64, 0, std::ptr::null_mut(), &mut raw) < 0
+            || raw.is_null()
+        {
+            return None;
+        }
+        let len = (0..).find(|&i| *raw.add(i) == 0).unwrap();
+        let root = String::from_utf16_lossy(std::slice::from_raw_parts(raw, len));
+        CoTaskMemFree(raw.cast());
+        let file = std::path::Path::new(&root).join("MyScreen UAC").join("myscreen-uac.exe");
+        file.is_file().then(|| file.to_string_lossy().into_owned())
+    }
+}
+
 type LineFn = ThreadsafeFunction<String, (), String, Status, false, false, 1024>;
 
 /// Lado do auxiliar elevado: conecta ao pipe `path`, confere que o servidor é

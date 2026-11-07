@@ -20,6 +20,7 @@ import {
 } from "@shared/remote/protocol";
 
 const ID = "AAECAwQFBgcICQoLDA0ODw"; // bytes 0..15
+const PUBLIC_KEY = "B" + "A".repeat(86);
 
 describe("ids", () => {
   it("randomId tem 22 caracteres base64url e é único", () => {
@@ -44,6 +45,13 @@ describe("rc.ctl", () => {
       { t: "state", sessionId: ID, paused: true, why: "elevated" },
       { t: "state", sessionId: ID, paused: false },
       { t: "blocked", sessionId: ID },
+      { t: "grant", reqId: ID, sessionId: ID, trackSid: "TR_abc123", width: 2560, height: 1440, admin: true },
+      { t: "admin-request", sessionId: ID, publicKey: PUBLIC_KEY },
+      { t: "admin-stop", sessionId: ID },
+      { t: "admin-status", sessionId: ID, status: "enabled" },
+      { t: "admin-view", sessionId: ID, desktop: "local" },
+      { t: "admin-view", sessionId: ID, desktop: "prompt", generation: 42, publicKey: PUBLIC_KEY },
+      { t: "admin-click", sessionId: ID, generation: 42, x: 65535, y: 0 },
       { t: "ping", sessionId: ID, n: 7 },
       { t: "pong", sessionId: ID, n: 7 },
     ] as const;
@@ -55,6 +63,10 @@ describe("rc.ctl", () => {
     expect(parseCtl({ t: "state", sessionId: ID, paused: "sim" })).toBeNull();
     expect(parseCtl({ t: "grant", reqId: ID, sessionId: ID, trackSid: "x y", width: 1, height: 1 })).toBeNull();
     expect(parseCtl({ t: "nada" })).toBeNull();
+    expect(parseCtl({ t: "admin-status", sessionId: ID, status: "pending" })).toBeNull();
+    expect(parseCtl({ t: "admin-view", sessionId: ID, desktop: "prompt", generation: 42 })).toBeNull();
+    expect(parseCtl({ t: "admin-click", sessionId: ID, generation: -1, x: 0, y: 0 })).toBeNull();
+    expect(parseCtl({ t: "admin-click", sessionId: ID, generation: 42, x: 65536, y: 0 })).toBeNull();
     expect(parseCtl([1, 2])).toBeNull();
     expect(parseCtl(new TextEncoder().encode("{não é json"))).toBeNull();
     expect(parseCtl(new Uint8Array([0xff, 0xfe]))).toBeNull();
@@ -159,5 +171,14 @@ describe("WheelAccumulator", () => {
     const w = new WheelAccumulator();
     expect(w.add(0, 0.4, 0)).toEqual({ dx: 0, dy: 0 });
     expect(w.add(0, 0.5, 0)).toEqual({ dx: 0, dy: -1 });
+  });
+});
+
+describe("rc.ctl clip", () => {
+  it("valida a confirmação de área de transferência", () => {
+    const ok = { t: "clip", sessionId: "EBESExQVFhcYGRobHB0eHw", clipId: "ICEiIyQlJicoKSorLC0uLw", ok: true };
+    expect(parseCtl(ok)).toEqual(ok);
+    expect(parseCtl({ ...ok, ok: "sim" })).toBeNull();
+    expect(parseCtl({ ...ok, clipId: "../x" })).toBeNull();
   });
 });

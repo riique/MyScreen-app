@@ -5,6 +5,7 @@ import { GreenRoom, type GreenRoomJoinConfig } from "@/components/conference/Gre
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Sheet } from "@/components/sheet";
 import { readMediaPrefs, readNickname, rememberRoom, writeNickname } from "@/lib/storage";
+import { readRoomIdentity, writeRoomIdentity } from "@/lib/roomIdentity";
 import type { MediaPrefs } from "@shared/media";
 import { fallbackRoomTitle } from "@shared/room";
 import { ApiError, usePlatform } from "@/platform";
@@ -89,7 +90,16 @@ export function RoomScreen({ roomId, onLeave }: { roomId: string; onLeave: () =>
     async (config: GreenRoomJoinConfig) => {
       setJoinError(null);
       try {
-        const data = await platform.api.token({ roomId, nickname: config.nickname, password: config.password });
+        // A identidade de antes nesta sala volta junto; com outro apelido o servidor dá uma nova.
+        const saved = readRoomIdentity(roomId);
+        const data = await platform.api.token({
+          roomId,
+          nickname: config.nickname,
+          password: config.password,
+          participantIdentity: saved?.identity,
+          identityProof: saved?.proof,
+        });
+        if (data.identityProof) writeRoomIdentity(roomId, { identity: data.participantIdentity, proof: data.identityProof });
         writeNickname(config.nickname);
         rememberRoom(roomId, roomInfo?.title ?? fallbackRoomTitle(roomId));
         setSession({

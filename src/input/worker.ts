@@ -147,7 +147,10 @@ parent.on("message", (event) => {
       dryRun = cmd.dryRun;
       ownPid = cmd.ownPid;
       load(cmd.nativePath);
-      parent.postMessage({ type: "probe", ok: dryRun || injector !== null, error: loadError });
+      parent.postMessage({
+        type: "probe", ok: dryRun || injector !== null, error: loadError,
+        uacPath: native?.uacServicePath?.() ?? null,
+      });
       break;
     case "inject":
       run(cmd.cmd);

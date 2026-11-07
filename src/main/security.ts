@@ -61,6 +61,12 @@ export function asNumber(value: unknown, name: string, min: number, max: number)
   return value;
 }
 
+export function asBytes(value: unknown, name: string, max: number): Uint8Array {
+  if (!(value instanceof Uint8Array)) throw new TypeError(`${name}: esperado Uint8Array`);
+  if (value.byteLength > max) throw new RangeError(`${name}: grande demais`);
+  return value;
+}
+
 export function asObject(value: unknown, name: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new TypeError(`${name}: esperado objeto`);

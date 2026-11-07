@@ -1,8 +1,9 @@
 
 import { useParticipants, useRoomContext } from "@livekit/components-react";
-import { Track, type Participant } from "livekit-client";
+import { Track, type Participant, type RemoteParticipant } from "livekit-client";
 import { useMemo } from "react";
 import { SheetHead } from "@/components/sheet";
+import { ParticipantVolume } from "./ParticipantVolume";
 
 interface ParticipantsListProps {
   isOpen: boolean;
@@ -64,6 +65,7 @@ export function ParticipantsList({ isOpen, onClose }: ParticipantsListProps) {
           const camMuted = isTrackMuted(p, Track.Source.Camera);
           const micMuted = isTrackMuted(p, Track.Source.Microphone);
           const sharing = p.getTrackPublication(Track.Source.ScreenShare) !== undefined;
+          const screenAudio = p.getTrackPublication(Track.Source.ScreenShareAudio) !== undefined;
 
           return (
             <li key={p.identity} className="px-4 py-3">
@@ -103,11 +105,34 @@ export function ParticipantsList({ isOpen, onClose }: ParticipantsListProps) {
                   />
                 ) : null}
               </dl>
+
+              {/* Volume só para quem ouve: ninguém mais na sala percebe. */}
+              {p.isLocal ? null : (
+                <div className="mt-2 flex flex-col gap-1">
+                  <VolumeRow label="Voz">
+                    <ParticipantVolume participant={p as RemoteParticipant} kind="voice" tone="sheet" />
+                  </VolumeRow>
+                  {screenAudio ? (
+                    <VolumeRow label="Tela">
+                      <ParticipantVolume participant={p as RemoteParticipant} kind="screen" tone="sheet" />
+                    </VolumeRow>
+                  ) : null}
+                </div>
+              )}
             </li>
           );
         })}
       </ul>
     </aside>
+  );
+}
+
+function VolumeRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="w-10 font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-ink-3">{label}</span>
+      {children}
+    </div>
   );
 }
 

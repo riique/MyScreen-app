@@ -72,12 +72,41 @@ export interface AppSettings {
   autoDownloadUpdates: boolean;
   /** "Nunca aceitar pedidos de controle": o app nem anuncia que pode ser controlado. */
   remoteControlDisabled: boolean;
+  /** Mostra, na chamada, o botão que toca os áudios do servidor para a sala. */
+  soundboardEnabled: boolean;
   /** Últimos estados de microfone e câmera, aparelhos e aprimoramentos. */
   media: MediaPrefs;
 }
 
 /** `media` também vai em pedaços: o main mescla com o que já está salvo. */
 export type AppSettingsPatch = Partial<Omit<AppSettings, "media">> & { media?: Partial<MediaPrefs> };
+
+/** Um áudio da pasta do servidor que pode ser tocado na chamada. */
+export interface SoundInfo {
+  /** Nome do arquivo no servidor. */
+  id: string;
+  name: string;
+  size: number;
+}
+
+/** Um anexo guardado no histórico do chat da sala. */
+export interface ChatFileInfo {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+}
+
+/** Uma mensagem do histórico do chat da sala, como o servidor guardou. */
+export interface StoredChatMessage {
+  id: string;
+  timestamp: number;
+  message: string;
+  attributes: Record<string, string>;
+  fromIdentity: string;
+  fromName: string;
+  files: ChatFileInfo[];
+}
 
 export interface RoomState {
   inRoom: boolean;
@@ -110,6 +139,23 @@ export type UpdateStatus =
 export type ShortcutAction = "mic" | "cam" | "stop-share";
 
 // ---------------------------------------------------------------- controle remoto
+
+/** O que quem controla copiou, pronto para mandar ao PC controlado. */
+export type RichClipboard =
+  | { kind: "same" }
+  | { kind: "empty" }
+  | { kind: "text"; key: string; text: string }
+  | { kind: "image"; key: string; name: string; bytes: Uint8Array }
+  | { kind: "files"; key: string; files: { name: string; bytes: Uint8Array }[]; skippedFolders: number }
+  | { kind: "unsupported"; key: string; message: string };
+
+/** Imagem/arquivos recebidos por byte stream, para o portão conferir e gravar. */
+export interface ClipDelivery {
+  sessionId: string;
+  clipId: string;
+  kind: "image" | "files";
+  files: { name: string; bytes: Uint8Array }[];
+}
 
 export interface RemoteCapabilities {
   /** O injetor nativo carregou: este PC pode ser controlado. */
@@ -144,6 +190,12 @@ export interface RemoteSessionEvent {
   ended: { reason: string; identity: string; name: string } | null;
 }
 
+export type RemoteAdminEvent =
+  | { t: "authorized"; sessionId: string; identity: string; sid: string; publicKey: string }
+  | { t: "desktop"; sessionId: string; secure: boolean }
+  | { t: "frame"; sessionId: string; generation: number; width: number; height: number; rgba: Uint8Array }
+  | { t: "end"; sessionId: string };
+
 export interface DesktopBridge {
   app: {
     info(): Promise<{ version: string; platform: string; isPackaged: boolean }>;
@@ -152,6 +204,8 @@ export interface DesktopBridge {
     setTheme(effective: "light" | "dark", preference: ThemePreference): void;
     openPrivacySettings(kind: "webcam" | "microphone"): void;
     openExternal(url: string): void;
+    /** Link clicado no chat: qualquer http(s), no navegador padrão. */
+    openLink(url: string): void;
   };
   settings: {
     get(): Promise<AppSettings>;
@@ -168,6 +222,26 @@ export interface DesktopBridge {
       identityProof?: string;
     }): Promise<ApiResult<TokenResponse>>;
     desktopInfo(): Promise<ApiResult<{ minVersion: string | null }>>;
+    /** Áudios que o servidor oferece para tocar na chamada. */
+    listSounds(): Promise<ApiResult<SoundInfo[]>>;
+    /** Bytes de um áudio da lista, para decodificar e tocar. */
+    fetchSound(id: string): Promise<ApiResult<Uint8Array>>;
+    /** Manda um áudio do computador para a lista do servidor (token da sala como prova). */
+    uploadSound(roomToken: string, name: string, bytes: Uint8Array): Promise<ApiResult<SoundInfo>>;
+    /** Histórico do chat da sala, guardado no servidor. */
+    chatHistory(roomId: string, roomToken: string): Promise<ApiResult<StoredChatMessage[]>>;
+    chatUploadFile(
+      roomId: string,
+      roomToken: string,
+      file: { name: string; type: string; bytes: Uint8Array },
+    ): Promise<ApiResult<ChatFileInfo>>;
+    chatAppend(
+      roomId: string,
+      roomToken: string,
+      msg: { id: string; timestamp: number; message: string; attributes: Record<string, string>; fileIds: string[] },
+    ): Promise<ApiResult<null>>;
+    chatDelete(roomId: string, roomToken: string, messageId: string): Promise<ApiResult<null>>;
+    chatFile(roomId: string, roomToken: string, fileId: string): Promise<ApiResult<Uint8Array>>;
   };
   capture: {
     list(): Promise<CaptureSource[]>;
@@ -206,10 +280,16 @@ export interface DesktopBridge {
     pause(paused: boolean): void;
     /** Libera janelas de administrador (pede o UAC). Resolve se ficou liberado. */
     elevate(): Promise<boolean>;
+    stopAdmin(): void;
+    onAdmin: (cb: (event: RemoteAdminEvent) => void) => () => void;
     /** Lado de quem controla: liga/desliga o hook que manda TODA tecla ao PC remoto. */
     captureKeys(on: boolean): void;
     /** Lado de quem controla: o texto da área de transferência deste PC. */
     readClipboard(): Promise<string>;
+    /** Lado de quem controla: texto, imagem ou arquivos copiados aqui (`same` se nada mudou desde `lastKey`). */
+    readClipboardRich(lastKey: string | null): Promise<RichClipboard>;
+    /** Lado controlado: imagem/arquivos chegaram de quem controla; o main decide se entram. */
+    deliverClip(from: RemotePeer, clip: ClipDelivery): void;
     /** Tecla física engolida pelo hook (scancode do protocolo). */
     onHookKey(cb: (scancode: number, down: boolean) => void): () => void;
     /** O hook ligou (true) ou não está disponível/desligou (false). */
@@ -219,6 +299,15 @@ export interface DesktopBridge {
     onConsent(cb: (req: RemoteConsentRequest) => void): () => void;
     onConsentClosed(cb: (reqId: string) => void): () => void;
     onSession(cb: (event: RemoteSessionEvent) => void): () => void;
+  };
+  recording: {
+    /** Cria o arquivo em Vídeos\MyScreen; o id identifica os pedaços seguintes. */
+    open(label: string, ext: "mp4" | "webm"): Promise<{ id: string; file: string }>;
+    write(id: string, bytes: Uint8Array): void;
+    /** Fecha o arquivo; resolve com o caminho dele (null se já estava fechado). */
+    close(id: string): Promise<string | null>;
+    /** Mostra o arquivo no Explorer, ou abre a pasta das gravações. */
+    reveal(file: string | null): void;
   };
   updates: {
     status(): Promise<UpdateStatus>;

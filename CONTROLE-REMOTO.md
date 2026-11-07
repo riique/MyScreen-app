@@ -2,8 +2,8 @@
 
 > Plano de implementação para que uma pessoa na sala controle o mouse e o teclado do computador
 > de outra, **só depois que a dona do computador permitir**, usando a chamada que já existe
-> (LiveKit SFU + app de desktop Electron). Escrito a partir do código atual de `MyScreen-app/`
-> (idêntico a `MyScreen/desktop/`) e do site em `MyScreen/`.
+> (LiveKit SFU + app de desktop Electron). O aplicativo atual está em `MyScreen-app/`
+> e o site em `MyScreen/`.
 >
 > Público: quem vai implementar. Onde há decisão, ela vem com o porquê. Onde há algo que só se
 > sabe medindo, está marcado como **medir no spike** — nenhum número de latência aqui é inventado.
@@ -20,7 +20,7 @@
 | :--- | :--- |
 | **Quem pode ser controlado** | Só quem está no **app de Windows** e **compartilhando uma tela inteira** (não janela, na fase 1). O navegador não consegue injetar mouse/teclado no sistema operacional — isso é impossível pelo modelo de segurança da web. |
 | **Quem pode controlar** | Qualquer participante: app de desktop (fase 1) e site no navegador (fase 2). Controlar é só capturar eventos e mandar pela rede, o que a web faz. |
-| **Imagem** | A **mesma track `ScreenShare`** que já é publicada. Não existe um segundo vídeo. |
+| **Imagem** | O controle normal usa a track `ScreenShare`. O UAC usa um canal privado. |
 | **Transporte do input** | **Data channel do LiveKit** (`publishData` com `topic` e `destinationIdentities`), que já existe no token (`canPublishData: true`). Nenhuma porta nova, nenhum servidor novo, funciona atrás de NAT/CGNAT pelo mesmo TURN. |
 | **Injeção no Windows** | `SendInput` num **módulo novo do addon Rust** (`native/src/input.rs`), carregado num utility process `input` — o mesmo padrão do som. |
 | **Quem decide se o evento entra** | O **processo principal** do Electron. Ele guarda a sessão de controle, confere remetente, sessão, frequência, coordenadas e zonas protegidas antes de qualquer `SendInput`. |
@@ -28,10 +28,9 @@
 | **Parar** | A qualquer momento, pelos dois lados: barra fixa "Fulano está controlando · Parar", atalho global, bandeja. E automaticamente: tela parou, alguém saiu/reconectou, PC bloqueou, app perdeu a sala. |
 | **Servidor** | Duas mudanças pequenas no site: `canUpdateOwnMetadata` no token (para anunciar "controlável") e **endurecer o reuso de identidade** no `/api/livekit/token` (seção 8.3 — hoje é um risco real que o controle remoto tornaria grave). |
 
-O que **não** dá para fazer sem um serviço do Windows rodando como SYSTEM (como o AnyDesk
-instala): controlar a tela de UAC, a tela de bloqueio/login, `Ctrl+Alt+Del` e janelas de
-programas abertos como administrador. Isso fica documentado como limitação e vira fase 4
-(seção 13).
+O botão **Liberar** atende janelas de programas abertos como administrador. Para responder ao
+próprio UAC, use o [serviço opcional do Windows](#acesso-administrativo-uac). Tela de bloqueio,
+login e `Ctrl+Alt+Del` exigem ação local.
 
 ---
 
@@ -149,8 +148,8 @@ Fluxo de uma sessão:
   Lock como o Chrome.
 - **"Enviar texto"**: caixa onde se cola um texto que é digitado no remoto caractere a
   caractere (útil quando os teclados têm layouts diferentes, ou para colar um comando longo).
-- Atalhos que nunca chegam ao remoto e o porquê aparecem numa dica: `Ctrl+Alt+Del` (exige serviço
-  do sistema), tela de UAC e de bloqueio.
+- `Ctrl+Alt+Del` e tela de bloqueio exigem ação local. Avisos do UAC de consentimento usam
+  o fluxo administrativo separado.
 
 ---
 
@@ -626,15 +625,22 @@ Saída: notas com o que foi medido, ajustes neste documento.
   e os demais eventos esperam ele sair, para um Ctrl+V logo depois colar o texto novo. O portão
   junta os pedaços e chama `clipboard.writeText` no main antes da tecla seguinte; pausado, descarta.
   Falta o sentido contrário ("Copiar do remoto").
+- Imagem e arquivos copiados em quem controla: **feito** (1.4.0). Vão por byte stream
+  (`myscreen.rc.clip`, um stream por arquivo, só para o controlado, até 50 arquivos / 100 MB),
+  com a sessão e o id da transferência nos atributos. O renderer controlado junta e entrega ao
+  main, que confere sessão, identidade, SID e pausa (`RemoteGate.acceptsClip`); a imagem vira PNG
+  na área de transferência, e os arquivos vão para `%TEMP%\MyScreen\Recebidos\…` e entram como
+  lista de arquivos (CF_HDROP, via `Set-Clipboard -LiteralPath`). A resposta volta em
+  `rc.ctl {t:"clip", ok}`; enquanto ela não chega (até 8 s), o input de quem controla espera,
+  para o Ctrl+V colar o conteúdo novo. Pastas não vão.
 - Pedir "trocar para o monitor 2" (o controlado confirma; troca de fonte = sessão nova).
 
-### Fase 4 — Nível AnyDesk (decisão separada, muda o produto)
+### Fase 4 — Acesso administrativo
 
-- Serviço do Windows como SYSTEM (instalador com administrador) para UAC, tela de bloqueio e
-  `Ctrl+Alt+Del` (`SendSAS`). Isso exige instalador por máquina, assinatura de código e muda o
-  modelo de segurança — não entra sem uma decisão explícita.
-- Transferência de arquivos (data streams do LiveKit, `sendFile`).
-- E2EE.
+- UAC de consentimento com serviço opcional e autorização administrativa por sessão.
+- Tela de bloqueio e `Ctrl+Alt+Del` (`SendSAS`) ficam fora do fluxo de suporte.
+- Transferência de arquivos fora da área de transferência (arrastar para a tela remota).
+- E2EE das chamadas.
 
 ---
 
@@ -649,8 +655,8 @@ Saída: notas com o que foi medido, ajustes neste documento.
   validados de um pipe nomeado aleatório, confere com `GetNamedPipeServerProcessId` que o servidor
   é o PID do MyScreen recebido na linha de comando, e sai quando o pipe fecha. Vale até o app
   fechar (um UAC por execução). Jogos com anti-cheat podem ignorar input injetado mesmo assim.
-- **UAC, tela de bloqueio e `Ctrl+Alt+Del`** ficam na área de trabalho segura do Windows, que um
-  app comum não alcança.
+- **UAC de consentimento** pode ser respondido com o serviço opcional. Tela de bloqueio,
+  `Ctrl+Alt+Del` e pedidos de credenciais exigem ação local.
 - **Layout de teclado**: vale o do PC controlado.
 - **Latência** = rede ida (input) + encode, rede e decode da tela na volta. A barra mostra a
   parte de rede medida; a parte do vídeo aparece no painel de estatísticas que já existe.
@@ -666,3 +672,67 @@ Saída: notas com o que foi medido, ajustes neste documento.
    `deny: busy`). Revisitar só se houver caso real.
 4. "Só ver o cursor" (apontar sem clicar) como modo intermediário de permissão — útil para
    aula/suporte; barato de adicionar (portão aceita só `MOVE`), decidir com uso real.
+
+## Acesso administrativo (UAC)
+
+### Instalação no computador controlado
+
+O pacote Windows inclui o componente opcional myscreen-uac.exe ao lado de MyScreen.exe e o
+script resources\manage-uac-service.ps1. A instalação aceita o executável sem assinatura.
+O script requer PowerShell de 64 bits aberto como administrador e confere o SHA-256 do auxiliar
+contra o hash publicado na release do GitHub. Use o pacote e o hash da mesma versão.
+
+A partir da pasta do pacote instalado ou extraído, execute:
+
+~~~powershell
+.\resources\manage-uac-service.ps1 -Source .\myscreen-uac.exe -ExpectedSha256 '<SHA-256 de myscreen-uac.exe>'
+~~~
+
+Reinicie o MyScreen depois da instalação. Execute o mesmo comando com o novo executável e o hash correspondente
+para atualizar o serviço. Para desinstalar o componente, use:
+
+~~~powershell
+.\resources\manage-uac-service.ps1 -Remove
+~~~
+
+O serviço é registrado como MyScreenUac e roda como LocalSystem. O instalador guarda o executável
+em Program Files\MyScreen UAC, com ACL explícita e restauração do binário anterior se a atualização
+falhar. O serviço fica ocioso até uma autorização de uma sessão interativa.
+
+### Uso e escopo
+
+1. Com a tela inteira compartilhada, peça o controle remoto e aguarde a autorização normal.
+2. Quem controla clica no escudo **Solicitar acesso administrativo** na barra da sala. A pessoa
+   controlada confirma o pedido no MyScreen e responde ao primeiro UAC presencialmente.
+3. Nos avisos seguintes, o controlador recebe a imagem do diálogo e pode clicar em **Sim** ou
+   **Não**. A sala exibe um aviso temporário. Ao terminar, o vídeo e o controle normais retomam.
+4. **Revogar UAC** encerra só o acesso administrativo. Pausar ou encerrar o controle, parar o
+   compartilhamento, perder a conexão ou bloquear o Windows revoga a autorização.
+
+O fluxo atende contas administrativas com UAC em modo de consentimento e desktop seguro. O
+serviço limita o input a cliques no diálogo do sistema e usa a política do Windows e UI Automation
+para deixar pedidos de senha no PC. O botão **Liberar** continua disponível para o input em janelas
+administrativas comuns. Quando a autorização administrativa estiver ativa, o próprio UAC do botão
+**Liberar** pode ser respondido pelo controlador.
+
+O Electron roda com as permissões normais. O serviço valida o pipe de autorização pelo SCM, limita
+seu acesso local a administradores e abre um worker na sessão Windows autorizada. O worker
+confere o processo que recebe os dados, a sessão desbloqueada, o desktop de entrada e o diálogo do
+Windows. DXGI captura apenas a área do diálogo. O app separa os cliques do UAC dos eventos
+normais e invalida coordenadas de avisos anteriores.
+
+Os quadros do UAC são comprimidos como JPEG e cifrados com AES-GCM antes do envio por byte
+stream do LiveKit, dirigido só ao controlador. As chaves efêmeras são acordadas via ECDH P-256 e
+o app confere o SID do participante dos dois lados. Uma nova conexão com a mesma identidade
+precisaria da chave privada da instância que fez o pedido original para decifrar os quadros.
+O compartilhamento e o gravador usam a trilha de tela comum.
+
+### Verificação manual antes de distribuir
+
+- Em dois PCs Windows, use uma conta administrativa com UAC padrão e o pacote da release.
+  Abra um aviso real. Confira que o controlador vê o diálogo, consegue aceitar e recusar,
+  e volta a ver a tela sem criar uma nova sessão.
+- Com um terceiro participante gravando a tela normal, confira que ele só recebe o aviso
+  de espera durante o UAC e que os quadros protegidos ficam fora do arquivo.
+- Teste revogação, perda de conexão, bloqueio, conta padrão, segundo monitor, DPI e rotação.
+  Confira que o serviço não expõe o login ou campos de senha e que o fluxo volta ao desktop comum.

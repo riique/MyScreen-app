@@ -80,6 +80,18 @@ beforeEach(() => {
 });
 
 describe("consentimento", () => {
+  it("restringe pedidos administrativos à sessão ativa e ao SID autorizado", () => {
+    expect(t.gate.canUseAdmin(ana, SESSION)).toBe(false);
+    t.grant();
+    expect(t.gate.canUseAdmin(ana, SESSION)).toBe(true);
+    expect(t.gate.canUseAdmin(ana, REQ)).toBe(false);
+    expect(t.gate.canUseAdmin({ ...ana, sid: "PA_ana2" }, SESSION)).toBe(false);
+    t.gate.setPaused(true);
+    expect(t.gate.canUseAdmin(ana, SESSION)).toBe(false);
+    t.gate.setPaused(false);
+    t.gate.peerSeen(ana.identity, "PA_ana2");
+    expect(t.gate.canUseAdmin(ana, SESSION)).toBe(false);
+  });
   it("quem permitiu com o MyScreen na frente recebe o aviso junto com o grant", () => {
     const u = setup();
     u.world.appFocused = true;
@@ -304,5 +316,26 @@ describe("área de transferência", () => {
   it("só de quem controla", () => {
     for (const c of clip("x")) t.input(c, { identity: "Bia-00000000", sid: "PA_b", name: "Bia" });
     expect(t.clipboard).toEqual([]);
+  });
+});
+
+describe("imagem e arquivos na área de transferência", () => {
+  const CLIP = "ICEiIyQlJicoKSorLC0uLw";
+  it("só aceitam de quem controla, na sessão ativa e sem pausa", () => {
+    expect(t.gate.acceptsClip(ana, SESSION)).toBe(false);
+    t.grant();
+    expect(t.gate.acceptsClip(ana, SESSION)).toBe(true);
+    expect(t.gate.acceptsClip({ ...ana, sid: "PA_outro" }, SESSION)).toBe(false);
+    expect(t.gate.acceptsClip(ana, REQ)).toBe(false);
+    t.gate.setPaused(true);
+    expect(t.gate.acceptsClip(ana, SESSION)).toBe(false);
+  });
+  it("a resposta vai para quem controla, e só na mesma sessão", () => {
+    t.grant();
+    t.gate.clipResult(SESSION, CLIP, true);
+    expect(t.sent.at(-1)).toEqual({ to: ana.identity, msg: { t: "clip", sessionId: SESSION, clipId: CLIP, ok: true } });
+    const before = t.sent.length;
+    t.gate.clipResult(REQ, CLIP, true);
+    expect(t.sent).toHaveLength(before);
   });
 });

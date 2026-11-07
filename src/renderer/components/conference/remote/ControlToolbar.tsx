@@ -1,28 +1,44 @@
-import { Keyboard, Maximize2, MousePointer2, Send, X } from "lucide-react";
+import { Keyboard, Maximize2, MousePointer2, Send, Shield, X } from "lucide-react";
 import { useState } from "react";
 import { MAX_TEXT_BYTES, type InputEvent } from "@shared/remote/protocol";
-import type { ViewerState } from "./useRemoteControlViewer";
+import type { ClipNotice, ViewerState } from "./useRemoteControlViewer";
+
+const CONTROL_HINT =
+  "Com a tela focada, todo o teclado vai para o PC remoto (inclusive Windows, Alt+Tab e Ctrl+C/V). Clique fora da tela para voltar ao seu.";
 
 /**
- * Barra fina no topo do quadro controlado: de quem é a tela, a latência
- * MEDIDA (sem medida aparece `--`), tela cheia, enviar texto e soltar.
+ * Por cima do quadro controlado: avisos (pausa, área de transferência) e o
+ * formulário de "Enviar texto". A barra escura (de quem é a tela, latência,
+ * tela cheia, soltar) só aparece em tela cheia; fora dela isso fica na barra
+ * da sala, em `ControllingPill`.
  */
 export function ControlToolbar({
   state,
+  clip,
   hidden,
+  bar,
+  textOpen,
+  setTextOpen,
   onFullscreen,
   onStop,
+  onAdmin,
   send,
 }: {
   state: Extract<ViewerState, { phase: "active" }>;
+  clip: ClipNotice | null;
   hidden: boolean;
+  bar: boolean;
+  textOpen: boolean;
+  setTextOpen: (open: boolean | ((v: boolean) => boolean)) => void;
   onFullscreen: () => void;
   onStop: () => void;
+  onAdmin: () => void;
   send: (ev: InputEvent) => void;
 }) {
-  const [textOpen, setTextOpen] = useState(false);
   const pausedText =
-    state.why === "elevated"
+    state.adminView && state.adminView.desktop !== "normal"
+      ? null
+      : state.why === "elevated"
       ? `${state.targetName} está numa janela de administrador. Para você mexer nela, ${state.targetName} precisa clicar em "Liberar" no MyScreen (ao lado de "está controlando").`
       : state.why === "local-input"
         ? `${state.targetName} está usando o mouse. O controle volta para você quando ${state.targetName} parar de mexer.`
@@ -44,11 +60,11 @@ export function ControlToolbar({
       onDoubleClick={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.stopPropagation()}
     >
-      <div className={`${faded ? "" : "pointer-events-auto"} flex max-w-full items-center gap-1 rounded-md bg-black/70 py-1 pr-1 pl-2.5 text-[0.75rem] text-white backdrop-blur-sm`}>
+      {bar ? <div className={`${faded ? "" : "pointer-events-auto"} flex max-w-full items-center gap-1 rounded-md bg-black/70 py-1 pr-1 pl-2.5 text-[0.75rem] text-white backdrop-blur-sm`}>
         <MousePointer2 size={13} strokeWidth={2} aria-hidden className="shrink-0 text-[#7dd3a8]" />
         <span
           className="truncate font-medium"
-          title="Com a tela focada, todo o teclado vai para o PC remoto (inclusive Windows, Alt+Tab e Ctrl+C/V). Clique fora da tela para voltar ao seu."
+          title={CONTROL_HINT}
         >
           Controlando a tela de {state.targetName}
         </span>
@@ -63,6 +79,7 @@ export function ControlToolbar({
         <ToolbarButton label="Tela cheia" onClick={onFullscreen}>
           <Maximize2 size={14} strokeWidth={1.75} aria-hidden />
         </ToolbarButton>
+        <AdminButton state={state} onAdmin={onAdmin} />
         <button
           type="button"
           onClick={onStop}
@@ -71,14 +88,107 @@ export function ControlToolbar({
           <X size={13} strokeWidth={2} aria-hidden />
           Soltar
         </button>
-      </div>
+      </div> : null}
       {pausedText ? (
         <p role="status" className="rounded-md bg-[#b54708]/90 px-2.5 py-1 text-[0.75rem] font-medium text-white">
           {pausedText}
         </p>
       ) : null}
+      {clip ? (
+        <p
+          role="status"
+          className={`rounded-md px-2.5 py-1 text-[0.75rem] font-medium text-white ${
+            clip.tone === "error" ? "bg-[#b42318]/90" : clip.tone === "ok" ? "bg-[#067647]/90" : "bg-black/75"
+          }`}
+        >
+          {clip.text}
+        </p>
+      ) : null}
       {textOpen ? <SendText send={send} onClose={() => setTextOpen(false)} /> : null}
     </div>
+  );
+}
+
+/** Na barra da sala, ao lado de "Convidar", enquanto você controla uma tela. */
+export function ControllingPill({
+  state,
+  textOpen,
+  onToggleText,
+  onFullscreen,
+  onStop,
+  onAdmin,
+}: {
+  state: Extract<ViewerState, { phase: "active" }>;
+  textOpen: boolean;
+  onToggleText: () => void;
+  onFullscreen: () => void;
+  onStop: () => void;
+  onAdmin: () => void;
+}) {
+  const btn = "flex size-7 items-center justify-center transition-colors hover:bg-band [border-radius:var(--radius-cell)]";
+  return (
+    <div
+      role="status"
+      className="mr-1 flex h-9 min-w-0 items-center gap-1 border border-rule-2 bg-sheet pr-1 pl-2.5 text-[0.8125rem] text-ink [border-radius:var(--radius-cell)]"
+    >
+      <MousePointer2 size={14} strokeWidth={2} aria-hidden className="shrink-0 text-signal" />
+      <span className="max-w-[14rem] truncate font-medium" title={CONTROL_HINT}>
+        Controlando a tela de {state.targetName}
+      </span>
+      <span aria-hidden className="mx-1 h-3 w-px bg-rule-2" />
+      <span className="shrink-0 font-mono text-[0.75rem] text-ink-2 [font-variant-numeric:tabular-nums]" title="Ida e volta da rede, medida">
+        {state.rttMs === null ? "--" : `${state.rttMs} ms`}
+      </span>
+      <span aria-hidden className="mx-1 h-3 w-px bg-rule-2" />
+      <button
+        type="button"
+        aria-label="Enviar texto"
+        aria-pressed={textOpen}
+        title="Enviar texto"
+        onClick={onToggleText}
+        className={`${btn} ${textOpen ? "bg-band" : ""}`}
+      >
+        <Keyboard size={15} strokeWidth={1.75} aria-hidden />
+      </button>
+      <button type="button" aria-label="Tela cheia" title="Tela cheia" onClick={onFullscreen} className={btn}>
+        <Maximize2 size={15} strokeWidth={1.75} aria-hidden />
+      </button>
+      <AdminButton state={state} onAdmin={onAdmin} />
+      <button
+        type="button"
+        onClick={onStop}
+        className="ml-0.5 flex h-7 items-center gap-1 bg-[#b42318] px-2.5 text-[0.75rem] font-semibold text-white transition-colors hover:bg-[#912018] [border-radius:var(--radius-cell)]"
+      >
+        <X size={13} strokeWidth={2} aria-hidden />
+        Soltar
+      </button>
+    </div>
+  );
+}
+
+function AdminButton({ state, onAdmin }: { state: Extract<ViewerState, { phase: "active" }>; onAdmin: () => void }) {
+  if (!state.adminAvailable) return null;
+  const labels = {
+    waiting: "Aguardando a confirmação no PC remoto",
+    enabled: "Encerrar acesso administrativo",
+    refused: "Acesso recusado. Solicitar acesso administrativo",
+    unavailable: "Acesso indisponível. Solicitar acesso administrativo",
+    revoked: "Solicitar acesso administrativo",
+  };
+  const label = state.adminStatus ? labels[state.adminStatus] : "Solicitar acesso administrativo";
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      aria-pressed={state.adminStatus === "enabled"}
+      disabled={state.paused || state.adminStatus === "waiting"}
+      onClick={onAdmin}
+      className="flex h-7 shrink-0 items-center gap-1 rounded px-1.5 hover:bg-current/10 disabled:opacity-50"
+    >
+      <Shield size={14} aria-hidden />
+      {state.adminStatus === "waiting" ? "Aguardando…" : state.adminStatus === "enabled" ? "UAC ativo" : null}
+    </button>
   );
 }
 

@@ -24,7 +24,6 @@ import {
   RemoteTrackPublication,
   RoomEvent,
   Track,
-  TrackEvent,
   VideoPresets,
   VideoQuality,
   supportsAudioOutputSelection,
@@ -37,22 +36,38 @@ import {
 } from "livekit-client";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AudioCapabilities, CaptureSource, SystemAudioMode } from "@shared/ipc";
-import { DEFAULT_MEDIA_PREFS, RESOLUTION, SCREEN_BITRATE, screenBitrate, type MediaPrefs } from "@shared/media";
-import { ATTR_VERSION, RC_VERSION } from "@shared/remote/protocol";
+import {
+  CAMERA_BITRATE,
+  DEFAULT_MEDIA_PREFS,
+  RESOLUTION,
+  SCREEN_BITRATE,
+  screenBitrate,
+  type MediaPrefs,
+} from "@shared/media";
+import { ATTR_UAC, ATTR_VERSION, RC_VERSION } from "@shared/remote/protocol";
 import { ChatSidebar } from "./ChatSidebar";
+import { useRoomChat } from "./useRoomChat";
 import { MediaControls } from "./MediaControls";
 import { ParticipantsList } from "./ParticipantsList";
+import { ParticipantVolume, applySavedVolume } from "./ParticipantVolume";
 import { SettingsModal, type MediaSettings } from "./SettingsModal";
 import { ShareDialog } from "./ShareDialog";
 import { SystemAudioControl } from "./SystemAudioControl";
 import { TrackStatsDropdown } from "./TrackStatsDropdown";
 import { ConsentDialog } from "./remote/ConsentDialog";
 import { ControlOverlay } from "./remote/ControlOverlay";
-import { ControlToolbar } from "./remote/ControlToolbar";
+import { SecureDesktop } from "./remote/SecureDesktop";
+import { useRemoteAdminHost } from "./remote/useRemoteAdminHost";
+import { ControllingPill, ControlToolbar } from "./remote/ControlToolbar";
 import { PANIC_SHORTCUT_LABEL } from "./remote/labels";
 import { useRemoteControlHost, type HostShare } from "./remote/useRemoteControlHost";
 import { useRemoteControlViewer, type RemoteViewer } from "./remote/useRemoteControlViewer";
-import { readScreenVolume, screenVolumeKey, writeMediaPrefs, writeScreenVolume } from "@/lib/storage";
+import { formatElapsed } from "@shared/recording";
+import { RecordDialog, useNow, type RecordOption } from "./recording/RecordDialog";
+import { SoundboardControl } from "./soundboard/SoundboardControl";
+import { useSoundboard } from "./soundboard/useSoundboard";
+import { useRecording } from "./recording/useRecording";
+import { writeMediaPrefs } from "@/lib/storage";
 import {
   readCapture,
   readSystemAudio,
@@ -67,8 +82,6 @@ import { usePlatform } from "@/platform";
 import {
   Activity,
   Check,
-  ChevronDown,
-  ChevronUp,
   Columns2,
   ExternalLink,
   Link2,
@@ -82,9 +95,6 @@ import {
   PinOff,
   Users,
   Video,
-  Volume1,
-  Volume2,
-  VolumeX,
   X,
 } from "lucide-react";
 
@@ -190,15 +200,21 @@ export function ConferenceRoom({
           webAudioMix: true,
           stopLocalTrackOnUnpublish: true,
           ...(mediaPrefs.audioOutputId ? { audioOutput: { deviceId: mediaPrefs.audioOutputId } } : {}),
-          videoCaptureDefaults: { resolution: VideoPresets.h1080.resolution },
+          videoCaptureDefaults: { resolution: VideoPresets.h720.resolution },
           publishDefaults: {
-            videoEncoding: { maxBitrate: 3_000_000, maxFramerate: 30, priority: "high" },
+            videoEncoding: { maxBitrate: CAMERA_BITRATE, maxFramerate: 30, priority: "high" },
+            // Camadas da câmera em 720p e 360p: com a rede apertada, quem
+            // assiste desce um degrau em vez de ficar sem quadro. Duas camadas
+            // (e não três) mantêm leve o encode ao ligar a câmera.
+            videoSimulcastLayers: [VideoPresets.h360],
             screenShareEncoding: {
               maxBitrate: SCREEN_BITRATE["1080p"],
               maxFramerate: 30,
               priority: "high",
             },
-            degradationPreference: "maintain-resolution",
+            // Sem `degradationPreference` aqui: o padrão do SDK é
+            // `maintain-framerate` na câmera (sob aperto ela perde nitidez, não
+            // congela) e a tela recebe a sua em `startScreenShare`.
           },
         }}
         className="flex min-h-0 flex-1 flex-col"
@@ -295,6 +311,8 @@ function ConferenceStage({
 
   // O chat vive aqui, e não no painel: o painel desmonta ao fechar.
   const chat = useChat();
+  // Histórico guardado no servidor + o que chega ao vivo; apagar vale para todos.
+  const roomChat = useRoomChat({ room, roomId, roomToken: token, live: chat.chatMessages, sendLive: chat.send });
   const [chatDraft, setChatDraft] = useState("");
   const [chatSeen, setChatSeen] = useState(0);
   const chatCount = chat.chatMessages.length;
@@ -321,23 +339,44 @@ function ConferenceStage({
   // O que está no ar (só tela inteira pode ser controlada).
   const [hostShare, setHostShare] = useState<HostShare | null>(null);
   const [remoteDisabled, setRemoteDisabled] = useState(false);
+  const [soundboardEnabled, setSoundboardEnabled] = useState(false);
   useEffect(() => {
-    void window.myscreen.settings.get().then((s) => setRemoteDisabled(s.remoteControlDisabled));
+    void window.myscreen.settings.get().then((s) => {
+      setRemoteDisabled(s.remoteControlDisabled);
+      setSoundboardEnabled(s.soundboardEnabled);
+    });
   }, []);
   const remoteHost = useRemoteControlHost({
     room,
     share: hostShare,
     disabled: remoteDisabled,
     myName: localParticipant.name || localParticipant.identity || "você",
-    sendChat: chat.send,
+    sendChat: roomChat.send,
   });
   const remoteViewer = useRemoteControlViewer(room);
+  const remoteAdmin = useRemoteAdminHost(room);
+  // "Enviar texto" abre pela barra da sala, mas o formulário fica no quadro.
+  const [rcTextOpen, setRcTextOpen] = useState(false);
+  const rcActive = remoteViewer.state.phase === "active";
+  useEffect(() => {
+    if (!rcActive) setRcTextOpen(false);
+  }, [rcActive]);
+
+  /* --- Gravação ------------------------------------------------------------ */
+  const recording = useRecording({
+    room,
+    myName: localParticipant.name || localParticipant.identity || "Alguém",
+    sendChat: roomChat.send,
+  });
+  const [isRecordOpen, setIsRecordOpen] = useState(false);
+
+  /* --- Áudios do servidor (o botão só aparece para quem ligou; o som, todos ouvem) */
+  const soundboard = useSoundboard(room, token);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
   const [controlError, setControlError] = useState<string | null>(null);
   const [pinned, setPinned] = useState<string[]>([]);
-  const [dockHidden, setDockHidden] = useState(readDockHidden);
   const [unstableConnection, setUnstableConnection] = useState(false);
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [screenShareError, setScreenShareError] = useState<string | null>(null);
@@ -459,7 +498,7 @@ function ConferenceStage({
     }
     function onSubscribed(track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant) {
       pinHighQuality(publication);
-      if (publication.source === Track.Source.ScreenShareAudio) applyScreenVolume(track, participant);
+      applySavedVolume(track, publication.source, participant);
     }
     for (const participant of room.remoteParticipants.values()) {
       for (const publication of participant.trackPublications.values()) {
@@ -842,42 +881,79 @@ function ConferenceStage({
     [focusKeysJoined],
   );
 
-  /* --- Janelas separadas --------------------------------------------------
+  /* --- Janelas separadas e flutuantes -------------------------------------
      `window.open("")` vira uma BrowserWindow com moldura nativa (o processo
      principal acrescenta "Sempre no topo" e "Mover para o monitor" no botão
-     direito). O vídeo usa a MESMA trilha já recebida, sem nova assinatura. */
+     direito). A flutuante é a mesma coisa sem moldura e sempre no topo: uma
+     por quadro, quantas a pessoa quiser. O vídeo usa a MESMA trilha já
+     recebida, sem nova assinatura, e não depende do <video> do quadro: o
+     quadro pode trocar de lugar (grade, destaque, faixa) sem a janela apagar —
+     era isso que deixava preto o PiP do Chromium. */
   const popouts = useRef(new Map<string, Popout>());
+  const tilesRef = useRef(allTiles);
+  tilesRef.current = allTiles;
 
-  const openPopout = useCallback((trackRef: TrackReferenceOrPlaceholder, label: string) => {
-    const key = tileKey(trackRef);
-    const existing = popouts.current.get(key);
-    if (existing && !existing.win.closed) {
-      existing.win.focus();
-      return;
+  /** Reata a janela à trilha atual; se a trilha recebida morreu, assina de novo. */
+  const reloadPopout = useCallback((key: string) => {
+    const popout = popouts.current.get(key);
+    if (!popout || popout.win.closed) return;
+    const publication = tilesRef.current.find((t) => tileKey(t) === popout.tileKey)?.publication;
+    const track = publication?.track?.mediaStreamTrack;
+    if (track) {
+      popout.track = track;
+      popout.video.srcObject = new MediaStream([track]);
+      void popout.video.play().catch(() => {});
     }
-    const track = trackRef.publication?.track?.mediaStreamTrack;
-    if (!track) {
-      setControlError("Este quadro ainda não tem vídeo para abrir em outra janela.");
-      return;
+    if (publication instanceof RemoteTrackPublication && (!track || track.readyState === "ended")) {
+      publication.setSubscribed(false);
+      setTimeout(() => publication.setSubscribed(true), 300);
     }
-    const isScreen = trackRef.source === Track.Source.ScreenShare;
-    const win = window.open(
-      "",
-      `myscreen-${key.replace(/[^a-z0-9]/gi, "-")}`,
-      isScreen ? "popup,width=1280,height=720" : "popup,width=640,height=360",
-    );
-    if (!win) {
-      setControlError("Não foi possível abrir a nova janela.");
-      return;
-    }
-    const video = mountPopout(win, label, trackRef.participant.isLocal && !isScreen);
-    video.srcObject = new MediaStream([track]);
-    popouts.current.set(key, { win, video, track });
   }, []);
+
+  const openPopout = useCallback(
+    (trackRef: TrackReferenceOrPlaceholder, label: string, floating = false) => {
+      const tKey = tileKey(trackRef);
+      const key = floating ? `float:${tKey}` : tKey;
+      const existing = popouts.current.get(key);
+      if (existing && !existing.win.closed) {
+        existing.win.focus();
+        return;
+      }
+      const track = trackRef.publication?.track?.mediaStreamTrack;
+      if (!track) {
+        setControlError("Este quadro ainda não tem vídeo para abrir em outra janela.");
+        return;
+      }
+      const isScreen = trackRef.source === Track.Source.ScreenShare;
+      const size = floating
+        ? isScreen
+          ? "width=560,height=315"
+          : "width=400,height=225"
+        : isScreen
+          ? "width=1280,height=720"
+          : "width=640,height=360";
+      const win = window.open(
+        "",
+        `${floating ? FLOAT_WINDOW_PREFIX : "myscreen-"}${tKey.replace(/[^a-z0-9]/gi, "-")}`,
+        `popup,${size}`,
+      );
+      if (!win) {
+        setControlError("Não foi possível abrir a nova janela.");
+        return;
+      }
+      const video = mountPopout(win, label, trackRef.participant.isLocal && !isScreen, {
+        floating,
+        onReload: () => reloadPopout(key),
+      });
+      video.srcObject = new MediaStream([track]);
+      popouts.current.set(key, { win, video, track, tileKey: tKey });
+    },
+    [reloadPopout],
+  );
 
   useEffect(() => {
     for (const [key, popout] of popouts.current) {
-      const tile = allTiles.find((t) => tileKey(t) === key);
+      const tile = allTiles.find((t) => tileKey(t) === popout.tileKey);
       const track = tile?.publication?.track?.mediaStreamTrack;
       if (popout.win.closed || !tile) {
         if (!popout.win.closed) popout.win.close();
@@ -902,14 +978,37 @@ function ConferenceStage({
     };
   }, []);
 
-  const toggleDock = useCallback(() => {
-    setDockHidden((hidden) => {
-      writeDockHidden(!hidden);
-      return !hidden;
-    });
-  }, []);
+  const participants = useParticipants();
+  const participantCount = participants.length;
 
-  const participantCount = useParticipants().length;
+  // Cada câmera e cada tela publicada na sala, de qualquer pessoa.
+  const recordOptions: RecordOption[] = participants.flatMap((p) => {
+    const person = p.name || p.identity || (p.isLocal ? "Você" : "Participante");
+    const out: RecordOption[] = [];
+    const cam = p.getTrackPublication(Track.Source.Camera);
+    if (cam) {
+      out.push({
+        identity: p.identity,
+        source: Track.Source.Camera,
+        label: `Câmera de ${person}`,
+        person,
+        isLocal: p.isLocal,
+        live: !cam.isMuted && Boolean(cam.track),
+      });
+    }
+    const screen = p.getTrackPublication(Track.Source.ScreenShare);
+    if (screen) {
+      out.push({
+        identity: p.identity,
+        source: Track.Source.ScreenShare,
+        label: `Tela de ${person}`,
+        person,
+        isLocal: p.isLocal,
+        live: !screen.isMuted && Boolean(screen.track),
+      });
+    }
+    return out;
+  });
   const roomLabel = room.name || roomId;
 
   const reconnecting =
@@ -926,6 +1025,7 @@ function ConferenceStage({
   const notices = [
     screenShareError ? { key: "screen", text: screenShareError, dismiss: () => setScreenShareError(null) } : null,
     controlError ? { key: "control", text: controlError, dismiss: () => setControlError(null) } : null,
+    recording.error ? { key: "record", text: recording.error, dismiss: recording.dismissError } : null,
     remoteViewer.notice ? { key: "remote", text: remoteViewer.notice, dismiss: remoteViewer.dismissNotice } : null,
     remoteViewer.state.phase === "requesting"
       ? {
@@ -944,6 +1044,7 @@ function ConferenceStage({
   ].filter((n): n is { key: string; text: string; dismiss: () => void } => n !== null);
 
   const closeShareDialog = useCallback(() => setIsShareDialogOpen(false), []);
+  const closeRecordDialog = useCallback(() => setIsRecordOpen(false), []);
 
   const updateAudioPrefs = useCallback((patch: Partial<SystemAudioPrefs>) => {
     setAudioPrefs((prev) => {
@@ -963,6 +1064,8 @@ function ConferenceStage({
     onTogglePin: togglePin,
     onToggleFullscreen: toggleFullscreen,
     remote: remoteViewer,
+    rcTextOpen,
+    setRcTextOpen,
   };
 
   return (
@@ -998,8 +1101,26 @@ function ConferenceStage({
               elevated={remoteHost.session.elevated}
               elevating={remoteHost.elevating}
               onElevate={remoteHost.elevate}
+              admin={remoteAdmin}
               onPause={() => remoteHost.pause(!remoteHost.session?.paused)}
               onStop={remoteHost.stop}
+            />
+          ) : null}
+          {recording.recordings.length > 0 ? (
+            <RecordingPill
+              count={recording.recordings.length}
+              since={Math.min(...recording.recordings.map((r) => r.startedAt))}
+              onClick={() => setIsRecordOpen(true)}
+            />
+          ) : null}
+          {remoteViewer.state.phase === "active" ? (
+            <ControllingPill
+              state={remoteViewer.state}
+              textOpen={rcTextOpen}
+              onToggleText={() => setRcTextOpen((v) => !v)}
+              onFullscreen={() => toggleFullscreen(document.querySelector("[data-rc-controlled]"))}
+              onStop={remoteViewer.stop}
+              onAdmin={remoteViewer.state.adminStatus === "enabled" ? remoteViewer.stopAdmin : remoteViewer.requestAdmin}
             />
           ) : null}
           <CopyLinkButton url={platform.inviteUrl(roomId)} />
@@ -1090,8 +1211,10 @@ function ConferenceStage({
               <ChatSidebar
                 isOpen
                 onClose={() => setPanel(null)}
-                chatMessages={chat.chatMessages}
-                send={chat.send}
+                chatMessages={roomChat.entries}
+                send={roomChat.send}
+                onDelete={roomChat.remove}
+                loadFile={roomChat.loadFile}
                 isSending={chat.isSending}
                 draft={chatDraft}
                 onDraftChange={setChatDraft}
@@ -1117,28 +1240,8 @@ function ConferenceStage({
         ) : null}
       </div>
 
-      {/* --- Doca recolhível -------------------------------------------- */}
-      {dockHidden ? (
-        <button
-          type="button"
-          onClick={toggleDock}
-          aria-label="Mostrar controles"
-          title="Mostrar controles"
-          className={cn(DOCK_HANDLE, "bottom-0 z-20")}
-        >
-          <ChevronUp size={16} strokeWidth={1.75} aria-hidden />
-        </button>
-      ) : null}
-      <footer hidden={dockHidden} className="relative shrink-0 border-t border-rule bg-sheet px-3 pt-3 pb-3">
-        <button
-          type="button"
-          onClick={toggleDock}
-          aria-label="Esconder controles"
-          title="Esconder controles"
-          className={cn(DOCK_HANDLE, "-top-6")}
-        >
-          <ChevronDown size={16} strokeWidth={1.75} aria-hidden />
-        </button>
+      {/* --- Doca ------------------------------------------------------- */}
+      <footer className="relative shrink-0 border-t border-rule bg-sheet px-3 pt-3 pb-3">
         <MediaControls
           isMicOn={isMicOn}
           isCamOn={isCamOn}
@@ -1148,21 +1251,26 @@ function ConferenceStage({
           onToggleMic={guard(toggleMic)}
           onToggleCam={guard(toggleCam)}
           onToggleScreenShare={() => (isScreenSharing ? void stopScreenShare() : setIsShareDialogOpen(true))}
+          recordingCount={recording.recordings.length}
+          onRecord={() => setIsRecordOpen(true)}
           onToggleFullscreen={() => toggleFullscreen(shellRef.current)}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onLeave={handleLeave}
           extra={
-            systemAudioActive ? (
-              <SystemAudioControl
-                prefs={audioPrefs}
-                paused={audioPaused}
-                onChange={updateAudioPrefs}
-                onPausedChange={(p) => {
-                  setAudioPaused(p);
-                  window.myscreen.audio.update({ paused: p });
-                }}
-              />
-            ) : null
+            <>
+              {soundboardEnabled ? <SoundboardControl board={soundboard} /> : null}
+              {systemAudioActive ? (
+                <SystemAudioControl
+                  prefs={audioPrefs}
+                  paused={audioPaused}
+                  onChange={updateAudioPrefs}
+                  onPausedChange={(p) => {
+                    setAudioPaused(p);
+                    window.myscreen.audio.update({ paused: p });
+                  }}
+                />
+              ) : null}
+            </>
           }
         />
       </footer>
@@ -1178,6 +1286,21 @@ function ConferenceStage({
       {remoteHost.consent ? (
         <ConsentDialog key={remoteHost.consent.reqId} request={remoteHost.consent} onDecide={remoteHost.decide} />
       ) : null}
+
+      <RecordDialog
+        open={isRecordOpen}
+        options={recordOptions}
+        recordings={recording.recordings}
+        lastFile={recording.lastFile}
+        onClose={closeRecordDialog}
+        onStart={(targets, audio) => {
+          recording.start(targets, audio);
+          setIsRecordOpen(false);
+        }}
+        onStop={(key) => void recording.stop(key)}
+        onStopAll={() => void recording.stopAll()}
+        onReveal={(file) => window.myscreen.recording.reveal(file)}
+      />
 
       <ShareDialog
         open={isShareDialogOpen}
@@ -1200,23 +1323,36 @@ function mediaFailure(error: unknown, what: "microfone" | "câmera"): string {
   if (name === "NotReadableError") return `A ${what === "câmera" ? "câmera" : "placa de som"} está em uso por outro aplicativo.`;
   if (name === "NotAllowedError")
     return `O Windows bloqueou o ${what === "câmera" ? "acesso à câmera" : "microfone"}. Libere em Configurações → Privacidade.`;
-  if (name === "NotFoundError") return `Nenhum${what === "câmera" ? "a câmera" : " microfone"} encontrado.`;
+  if (name === "NotFoundError") return what === "câmera" ? "Nenhuma câmera encontrada." : "Nenhum microfone encontrado.";
   return `Não foi possível usar ${what === "câmera" ? "a câmera" : "o microfone"} selecionado.`;
 }
 
 type Panel = "chat" | "people" | "stats";
 
-type Popout = { win: Window; video: HTMLVideoElement; track: MediaStreamTrack };
+type Popout = { win: Window; video: HTMLVideoElement; track: MediaStreamTrack; tileKey: string };
+
+/** O processo principal reconhece a janela flutuante por este começo do nome. */
+const FLOAT_WINDOW_PREFIX = "myscreen-float-";
 
 /**
  * Monta a página da janela separada: só o vídeo, em fundo preto. Duplo clique
  * alterna a tela cheia, e o cursor some depois de um tempo parado.
+ *
+ * A flutuante não tem moldura: uma barra sobre o vídeo (por onde se arrasta)
+ * traz o nome, recarregar e fechar. Ela some com o mouse parado; a faixa de
+ * arrastar continua lá mesmo invisível. F5 também recarrega.
  */
-function mountPopout(win: Window, title: string, mirror: boolean): HTMLVideoElement {
+function mountPopout(
+  win: Window,
+  title: string,
+  mirror: boolean,
+  { floating, onReload }: { floating: boolean; onReload: () => void },
+): HTMLVideoElement {
   const doc = win.document;
   doc.title = `${title} · MyScreen`;
   doc.body.replaceChildren();
-  doc.body.style.cssText = "margin:0;background:#000;overflow:hidden;height:100vh";
+  doc.body.style.cssText =
+    "margin:0;background:#000;overflow:hidden;height:100vh;font:500 12px/1 'Segoe UI',system-ui,sans-serif";
 
   const video = doc.createElement("video");
   video.autoplay = true;
@@ -1232,39 +1368,66 @@ function mountPopout(win: Window, title: string, mirror: boolean): HTMLVideoElem
     else void doc.documentElement.requestFullscreen().catch(() => {});
   });
 
+  let bar: HTMLDivElement | null = null;
+  if (floating) {
+    const style = doc.createElement("style");
+    style.textContent = `
+      .bar{position:fixed;inset:0 0 auto 0;height:32px;display:flex;align-items:center;gap:2px;
+        padding:0 4px 0 10px;color:#fff;background:linear-gradient(rgba(0,0,0,.7),rgba(0,0,0,0));
+        -webkit-app-region:drag;user-select:none;transition:opacity .2s}
+      .bar.idle{opacity:0}
+      .bar span{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;text-shadow:0 1px 2px #000}
+      .bar button{all:unset;-webkit-app-region:no-drag;display:flex;align-items:center;justify-content:center;
+        width:28px;height:26px;border-radius:5px;color:#fff}
+      .bar button:hover{background:rgba(255,255,255,.18)}
+      .bar button:focus-visible{outline:2px solid #fff}
+      .bar button.close:hover{background:#c42b1c}
+      .bar svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+    `;
+    doc.head.append(style);
+    bar = doc.createElement("div");
+    bar.className = "bar";
+    const name = doc.createElement("span");
+    name.textContent = title;
+    const button = (label: string, icon: string, onClick: () => void, className = "") => {
+      const b = doc.createElement("button");
+      b.type = "button";
+      b.title = label;
+      b.setAttribute("aria-label", label);
+      if (className) b.className = className;
+      b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${icon}</svg>`;
+      b.addEventListener("click", onClick);
+      return b;
+    };
+    bar.append(
+      name,
+      button("Recarregar (F5)", '<path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/>', onReload),
+      button("Fechar", '<path d="M18 6 6 18M6 6l12 12"/>', () => win.close(), "close"),
+    );
+    doc.body.append(bar);
+    doc.addEventListener("keydown", (event) => {
+      if (event.key === "F5" || (event.ctrlKey && event.key.toLowerCase() === "r")) {
+        event.preventDefault();
+        onReload();
+      }
+    });
+  }
+
   let timer: ReturnType<typeof setTimeout> | undefined;
   const wake = () => {
     doc.body.style.cursor = "";
+    bar?.classList.remove("idle");
     clearTimeout(timer);
     timer = setTimeout(() => {
       doc.body.style.cursor = "none";
+      bar?.classList.add("idle");
     }, FULLSCREEN_IDLE_MS);
   };
   doc.addEventListener("pointermove", wake);
+  win.addEventListener("focus", wake);
   wake();
 
   return video;
-}
-
-const DOCK_HANDLE =
-  "absolute left-3 flex h-6 w-16 items-center justify-center border border-b-0 border-rule-2 bg-sheet/85 text-ink-2 backdrop-blur-md transition-colors hover:bg-band hover:text-ink [border-radius:var(--radius-cell)_var(--radius-cell)_0_0]";
-
-const DOCK_HIDDEN_KEY = "myscreen:dock-hidden";
-
-function readDockHidden(): boolean {
-  try {
-    return localStorage.getItem(DOCK_HIDDEN_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function writeDockHidden(hidden: boolean) {
-  try {
-    localStorage.setItem(DOCK_HIDDEN_KEY, hidden ? "1" : "0");
-  } catch {
-    // Sem storage, a escolha vale só para esta sessão.
-  }
 }
 
 function tileKey(t: TrackReferenceOrPlaceholder): string {
@@ -1331,11 +1494,13 @@ type TileShared = {
   pinnedKeys: string[];
   canSideBySide: boolean;
   onSideBySide: (key: string) => void;
-  onPopout: (trackRef: TrackReferenceOrPlaceholder, label: string) => void;
+  onPopout: (trackRef: TrackReferenceOrPlaceholder, label: string, floating?: boolean) => void;
   fullscreenEl: Element | null;
   onTogglePin: (key: string) => void;
   onToggleFullscreen: (element: Element | null) => void;
   remote: RemoteViewer;
+  rcTextOpen: boolean;
+  setRcTextOpen: (open: boolean | ((v: boolean) => boolean)) => void;
 };
 
 /* ---------------------------------------------------------------------------
@@ -1494,6 +1659,8 @@ function Tile({
   onTogglePin,
   onToggleFullscreen,
   remote,
+  rcTextOpen,
+  setRcTextOpen,
 }: {
   trackRef: TrackReferenceOrPlaceholder;
   variant: "stage" | "grid" | "strip";
@@ -1521,10 +1688,11 @@ function Tile({
   // Controle remoto: só a tela de quem anuncia `rc.v` compatível (app de
   // Windows, tela inteira, recurso ligado) oferece "Pedir controle".
   const rcVersion = useParticipantAttribute(ATTR_VERSION, { participant });
+  const secureDesktop = useParticipantAttribute(ATTR_UAC, { participant }) === "1" && isScreen;
   const rs = remote.state;
   const isTarget = rs.phase !== "idle" && rs.target === participant.identity && isScreen;
   const controlling =
-    isTarget && rs.phase === "active" && hasVideo && trackRef.publication?.trackSid === rs.trackSid;
+    isTarget && rs.phase === "active" && trackRef.publication?.trackSid === rs.trackSid;
   const requesting = isTarget && rs.phase === "requesting";
   const canRequest =
     isScreen && !participant.isLocal && hasVideo && rcVersion === String(RC_VERSION) && rs.phase === "idle";
@@ -1558,22 +1726,11 @@ function Tile({
   const chromeHidden = isFullscreen && !chromeAwake;
 
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const [canPip, setCanPip] = useState(false);
-  useEffect(() => {
-    setCanPip(Boolean(document.pictureInPictureEnabled));
-  }, []);
-
-  const openPip = () => {
-    const video = ref.current?.querySelector("video");
-    if (!video) return;
-    void video.requestPictureInPicture().catch((error: unknown) => {
-      console.error("Janela flutuante recusada:", error);
-    });
-  };
 
   return (
     <div
       ref={ref}
+      data-rc-controlled={controlling ? "" : undefined}
       // Controlando, o duplo clique e o botão direito são do PC remoto.
       onDoubleClick={() => {
         if (!controlling) onToggleFullscreen(ref.current);
@@ -1590,7 +1747,9 @@ function Tile({
         chromeHidden && "cursor-none",
       )}
     >
-      {hasVideo ? (
+      {secureDesktop ? (
+        <p role="status" className="px-4 text-center text-sm text-white">O Windows está exibindo um aviso protegido.</p>
+      ) : hasVideo ? (
         <VideoTrack
           trackRef={trackRef}
           className={cn(
@@ -1613,12 +1772,28 @@ function Tile({
 
       {controlling && rs.phase === "active" ? (
         <>
-          <ControlOverlay send={remote.send} label={`Tela de ${name}, controlada por você`} />
+          {rs.adminView && rs.adminView.desktop !== "normal" ? (
+            <SecureDesktop
+              key={rs.adminView.desktop === "prompt" ? rs.adminView.generation : rs.adminView.desktop}
+              view={rs.adminView}
+              onClick={remote.adminClick}
+              frame={rs.adminImage}
+            />
+          ) : !secureDesktop && hasVideo ? <ControlOverlay
+            send={remote.send}
+            sendClip={remote.sendClip}
+            label={`Tela de ${name}, controlada por você`}
+          /> : null}
           <ControlToolbar
             state={rs}
+            clip={remote.clipNotice}
             hidden={chromeHidden}
+            bar={isFullscreen}
+            textOpen={rcTextOpen}
+            setTextOpen={setRcTextOpen}
             onFullscreen={() => onToggleFullscreen(ref.current)}
             onStop={remote.stop}
+            onAdmin={rs.adminStatus === "enabled" ? remote.stopAdmin : remote.requestAdmin}
             send={remote.send}
           />
         </>
@@ -1653,8 +1828,8 @@ function Tile({
             : "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100",
         )}
       >
-        {isScreen && !participant.isLocal ? (
-          <ScreenVolume participant={participant as RemoteParticipant} />
+        {!participant.isLocal ? (
+          <ParticipantVolume participant={participant as RemoteParticipant} kind={isScreen ? "screen" : "voice"} />
         ) : null}
         {canRequest ? (
           <TileAction label={`Pedir para controlar a tela de ${name}`} onClick={() => remote.request(participant)}>
@@ -1711,14 +1886,12 @@ function Tile({
               disabled: !hasVideo,
               onSelect: () => onPopout(trackRef, label),
             },
-            canPip
-              ? {
-                  label: "Janela flutuante",
-                  icon: <PictureInPicture2 size={14} strokeWidth={1.75} aria-hidden />,
-                  disabled: !hasVideo,
-                  onSelect: openPip,
-                }
-              : null,
+            {
+              label: "Janela flutuante",
+              icon: <PictureInPicture2 size={14} strokeWidth={1.75} aria-hidden />,
+              disabled: !hasVideo,
+              onSelect: () => onPopout(trackRef, label, true),
+            },
             variant === "strip" && canSideBySide
               ? {
                   label: "Pôr lado a lado no destaque",
@@ -1743,85 +1916,6 @@ function Tile({
           ]}
         />
       ) : null}
-    </div>
-  );
-}
-
-/**
- * Aplica à faixa de som da tela que acabou de chegar o volume guardado para
- * quem compartilha. Toda vez que a tela para e volta é uma faixa nova, que
- * nasce em 100%: sem isto o controle mostrava o valor salvo e tocava no máximo.
- * O SDK só reaplica o volume no `attach` quando ele não é zero, e o ganho do
- * Web Audio nasce depois do evento — então reaplica também logo após anexar.
- */
-function applyScreenVolume(track: RemoteTrack, participant: RemoteParticipant) {
-  if (track.kind !== Track.Kind.Audio) return;
-  const audio = track as RemoteTrack & { setVolume(v: number): void };
-  const current = () => readScreenVolume(screenVolumeKey(participant));
-  participant.setVolume(current(), Track.Source.ScreenShareAudio);
-  audio.setVolume(current());
-  track.on(TrackEvent.ElementAttached, () => {
-    setTimeout(() => audio.setVolume(current()), 0);
-  });
-}
-
-/**
- * Volume do som da tela compartilhada, só para quem assiste. Não mexe na voz
- * de ninguém: só na faixa de áudio da tela. Fica guardado por pessoa (pelo
- * nome) e vale para as próximas telas dela, nesta e nas próximas reuniões.
- */
-function ScreenVolume({ participant }: { participant: RemoteParticipant }) {
-  const key = screenVolumeKey(participant);
-  const [volume, setVolume] = useState(() => readScreenVolume(key));
-  const lastAudible = useRef(volume > 0 ? volume : 1);
-
-  // Outra pessoa no mesmo quadro: mostra o volume dela.
-  useEffect(() => {
-    const v = readScreenVolume(key);
-    setVolume(v);
-    if (v > 0) lastAudible.current = v;
-  }, [key]);
-
-  useEffect(() => {
-    participant.setVolume(volume, Track.Source.ScreenShareAudio);
-  }, [participant, volume]);
-
-  const apply = (v: number) => {
-    setVolume(v);
-    if (v > 0) lastAudible.current = v;
-    writeScreenVolume(key, v);
-  };
-
-  const Icon = volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
-  const percent = Math.round(volume * 100);
-
-  return (
-    <div
-      className="flex items-center rounded-md bg-black/55 text-white backdrop-blur-sm"
-      onClick={(event) => event.stopPropagation()}
-      onDoubleClick={(event) => event.stopPropagation()}
-    >
-      <button
-        type="button"
-        aria-label={volume === 0 ? "Ativar som da tela" : "Silenciar som da tela"}
-        title={volume === 0 ? "Ativar som da tela" : "Silenciar som da tela"}
-        onClick={() => apply(volume === 0 ? lastAudible.current : 0)}
-        className="flex size-8 items-center justify-center rounded-md transition-colors hover:bg-black/40"
-      >
-        <Icon size={14} strokeWidth={1.75} aria-hidden />
-      </button>
-      <input
-        type="range"
-        min={0}
-        max={100}
-        step={5}
-        value={percent}
-        onChange={(event) => apply(Number(event.target.value) / 100)}
-        aria-label="Volume do som da tela"
-        aria-valuetext={`${percent}%`}
-        title={`Som da tela: ${percent}%`}
-        className="mr-2.5 h-1 w-20 cursor-pointer accent-white"
-      />
     </div>
   );
 }
@@ -2029,6 +2123,7 @@ function ControlledPill({
   elevated,
   elevating,
   onElevate,
+  admin,
   onPause,
   onStop,
 }: {
@@ -2038,6 +2133,7 @@ function ControlledPill({
   elevated: boolean;
   elevating: boolean;
   onElevate: () => void;
+  admin: boolean;
   onPause: () => void;
   onStop: () => void;
 }) {
@@ -2051,6 +2147,16 @@ function ControlledPill({
       <span className="max-w-[14rem] truncate font-medium">
         {paused ? `Controle de ${name} pausado` : `${name} está controlando`}
       </span>
+      {admin ? (
+        <button
+          type="button"
+          onClick={() => window.myscreen.remote.stopAdmin()}
+          title="Revogar acesso aos avisos do UAC"
+          className="h-7 px-2 text-[0.75rem] font-semibold hover:bg-alert-wash-2"
+        >
+          Revogar UAC
+        </button>
+      ) : null}
       {elevated && !paused ? (
         <button
           type="button"
@@ -2077,6 +2183,23 @@ function ControlledPill({
         Parar
       </button>
     </div>
+  );
+}
+
+/** Na barra da sala enquanto grava: quantos arquivos e há quanto tempo. */
+function RecordingPill({ count, since, onClick }: { count: number; since: number; onClick: () => void }) {
+  const now = useNow(true);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Gravações em andamento"
+      className="mr-1 flex h-9 items-center gap-2 border border-alert-line bg-alert-wash px-2.5 text-[0.8125rem] font-medium text-alert transition-colors hover:bg-alert-wash-2 [border-radius:var(--radius-cell)]"
+    >
+      <span aria-hidden className="size-2 shrink-0 animate-pulse rounded-full bg-[#d92d20]" />
+      <span>{count > 1 ? `Gravando ${count}` : "Gravando"}</span>
+      <span className="font-mono text-[0.75rem] [font-variant-numeric:tabular-nums]">{formatElapsed(now - since)}</span>
+    </button>
   );
 }
 

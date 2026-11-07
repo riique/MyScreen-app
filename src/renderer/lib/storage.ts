@@ -102,13 +102,16 @@ export function forgetRoom(id: string): void {
   }
 }
 
-// ---------------------------------------------------------------- volume da tela
+// ---------------------------------------------------------------- volumes por pessoa
 
 const SCREEN_VOLUMES_KEY = "myscreen:screen-volumes";
-const MAX_SCREEN_VOLUMES = 64;
+const VOICE_VOLUMES_KEY = "myscreen:voice-volumes";
+const MAX_VOLUMES = 64;
+/** A voz pode passar de 100%: o som da sala sai por Web Audio, com ganho. */
+export const MAX_VOICE_VOLUME = 2;
 
-function validVolume(v: unknown): v is number {
-  return typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 1;
+function validVolume(v: unknown, max = 1): v is number {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= max;
 }
 
 /** De quem é o volume: o nome sobrevive entre reuniões; a identidade, não. */
@@ -117,33 +120,47 @@ export function screenVolumeKey(p: { name?: string; identity: string }): string 
   return name ? `name:${name}` : `id:${p.identity}`;
 }
 
-function readVolumes(): Record<string, number> {
+function readVolumes(store: string, max: number): Record<string, number> {
   try {
-    const raw: unknown = JSON.parse(localStorage.getItem(SCREEN_VOLUMES_KEY) ?? "{}");
+    const raw: unknown = JSON.parse(localStorage.getItem(store) ?? "{}");
     if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
     const out: Record<string, number> = {};
-    for (const [k, v] of Object.entries(raw)) if (validVolume(v)) out[k] = v;
+    for (const [k, v] of Object.entries(raw)) if (validVolume(v, max)) out[k] = v;
     return out;
   } catch {
     return {};
   }
 }
 
-/** Volume guardado para essa pessoa; sem um, 100%. */
+function writeVolume(store: string, max: number, key: string, volume: number): void {
+  try {
+    const all = readVolumes(store, max);
+    delete all[key];
+    all[key] = volume;
+    // Mais recentes no fim: corta os mais antigos.
+    const entries = Object.entries(all).slice(-MAX_VOLUMES);
+    localStorage.setItem(store, JSON.stringify(Object.fromEntries(entries)));
+  } catch {
+    // Sem storage, o volume vale só para esta sessão.
+  }
+}
+
+/** Volume guardado para o som da tela dessa pessoa; sem um, 100%. */
 export function readScreenVolume(key: string): number {
-  const own = readVolumes()[key];
+  const own = readVolumes(SCREEN_VOLUMES_KEY, 1)[key];
   return validVolume(own) ? own : 1;
 }
 
 export function writeScreenVolume(key: string, volume: number): void {
-  try {
-    const all = readVolumes();
-    delete all[key];
-    all[key] = volume;
-    // Mais recentes no fim: corta os mais antigos.
-    const entries = Object.entries(all).slice(-MAX_SCREEN_VOLUMES);
-    localStorage.setItem(SCREEN_VOLUMES_KEY, JSON.stringify(Object.fromEntries(entries)));
-  } catch {
-    // Sem storage, o volume vale só para esta sessão.
-  }
+  writeVolume(SCREEN_VOLUMES_KEY, 1, key, volume);
+}
+
+/** Volume guardado para a voz (microfone) dessa pessoa; sem um, 100%. */
+export function readVoiceVolume(key: string): number {
+  const own = readVolumes(VOICE_VOLUMES_KEY, MAX_VOICE_VOLUME)[key];
+  return validVolume(own, MAX_VOICE_VOLUME) ? own : 1;
+}
+
+export function writeVoiceVolume(key: string, volume: number): void {
+  writeVolume(VOICE_VOLUMES_KEY, MAX_VOICE_VOLUME, key, volume);
 }
